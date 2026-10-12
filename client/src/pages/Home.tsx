@@ -952,6 +952,27 @@ function Preview({
   // Student App Node Tab state (for viewing direct Notes, MCQs, or Sub-Buttons inside any folder/button)
   const [studentTab, setStudentTab] = useState<"auto" | "topics" | "notes" | "mcq" | "mock">("auto");
 
+  const openNodeInPreview = (n: Node) => {
+    setQIndex(0);
+    setSelectedOpt(null);
+    setScore(0);
+    setQuizFinished(false);
+    setCurrentStack(prev => [...prev, n]);
+  };
+
+  const resetQuiz = () => {
+    setQIndex(0);
+    setSelectedOpt(null);
+    setScore(0);
+    setQuizFinished(false);
+  };
+
+  const toggleSaveItem = (id: string) => {
+    setSavedIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
   const allEnabledItems = useMemo(() => {
     const res: Node[] = [];
     const walk = (list: Node[]) => {
