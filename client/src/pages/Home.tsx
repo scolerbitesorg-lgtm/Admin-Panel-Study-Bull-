@@ -52,6 +52,10 @@ import {
   saveStudyBullStateToSupabase,
   subscribeToStudyBullState,
   SUPABASE_SQL_SCHEMA,
+  getStoredSupabaseConfig,
+  setSupabaseCredentials,
+  clearSupabaseCredentials,
+  testSupabaseConnection,
 } from "@/lib/supabase";
 import {
   TypingPracticeView,
@@ -2748,9 +2752,29 @@ export default function Home() {
   const [showBulkMcq, setShowBulkMcq] = useState(false);
   const [showPlusTool, setShowPlusTool] = useState(false);
   const [plusTargetNodeId, setPlusTargetNodeId] = useState<string | null>(null);
+  const [showCommitModal, setShowCommitModal] = useState(false);
+  const [commitMsg, setCommitMsg] = useState("");
+  const [commitHistory, setCommitHistory] = useState<
+    Array<{ id: string; msg: string; timestamp: string }>
+  >(() => {
+    try {
+      const saved = localStorage.getItem("studybull_commit_logs");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [previewTargetId, setPreviewTargetId] = useState<
     string | null | undefined
   >(undefined);
+
+  // Database Connection Manager State
+  const [showDbModal, setShowDbModal] = useState(false);
+  const [dbConfigState, setDbConfigState] = useState(() => getStoredSupabaseConfig());
+  const [dbUrlInput, setDbUrlInput] = useState(() => getStoredSupabaseConfig().url);
+  const [dbKeyInput, setDbKeyInput] = useState(() => getStoredSupabaseConfig().key);
+  const [dbTesting, setDbTesting] = useState(false);
+  const [dbStatusMsg, setDbStatusMsg] = useState<string | null>(null);
 
   // Dedicated Typing Passages Manager State
   const [showPassageForm, setShowPassageForm] = useState(false);
@@ -3163,6 +3187,96 @@ export default function Home() {
       "✓ Custom Web Code Saved!",
       `Custom web code updated for "${target?.title || "container"}".`
     );
+  };
+
+  const handleCommitSubmit = () => {
+    const messageText = commitMsg.trim() || "Manual Change Commit";
+    const newLog = {
+      id: `commit-${Date.now()}`,
+      msg: messageText,
+      timestamp: new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    };
+    const updatedLogs = [newLog, ...commitHistory.slice(0, 29)];
+    setCommitHistory(updatedLogs);
+    try {
+      localStorage.setItem("studybull_commit_logs", JSON.stringify(updatedLogs));
+    } catch {
+      // ignore
+    }
+
+    saveStructure(nodes, `✓ Commit Published: "${messageText}"`);
+    showToast(
+      "success",
+      "✓ Commit Message Saved & Sync Completed!",
+      `Commit message "${messageText}" saved and synchronized live to database.`
+    );
+    setShowCommitModal(false);
+    setCommitMsg("");
+  };
+
+  const handleTestAndSaveDb = async () => {
+    setDbTesting(true);
+    setDbStatusMsg("Validating credentials & connecting to Supabase...");
+    const res = setSupabaseCredentials(dbUrlInput, dbKeyInput);
+    if (!res.success) {
+      setDbStatusMsg(`❌ ${res.message}`);
+      setDbTesting(false);
+      return;
+    }
+
+    const test = await testSupabaseConnection();
+    if (test.success) {
+      const cfg = getStoredSupabaseConfig();
+      setDbConfigState(cfg);
+      setDbStatusMsg(`✅ ${test.message}`);
+      showToast("success", "✓ Database Connected!", "Connected successfully to Supabase database.");
+      // Attempt to fetch existing remote database content first
+      try {
+        const remote = await fetchStudyBullStateFromSupabase<Node, UserAppSettings>();
+        if (remote && remote.nodes && remote.nodes.length > 0) {
+          setNodes(remote.nodes);
+          if (remote.settings) {
+            setAppSettings(prev => ({ ...prev, ...remote.settings }));
+          }
+          showToast("info", "📥 Synced Remote Data!", "Loaded existing data from your Supabase database.");
+        } else {
+          // If remote is empty, sync current local nodes to Supabase
+          await saveStudyBullStateToSupabase(nodes, appSettings, true);
+          showToast("success", "📤 Local Data Synced!", "Uploaded current admin items to your Supabase database.");
+        }
+      } catch {
+        void saveStudyBullStateToSupabase(nodes, appSettings, true);
+      }
+    } else {
+      setDbStatusMsg(`❌ ${test.message}`);
+    }
+    setDbTesting(false);
+  };
+
+  const handleForceSyncDb = async () => {
+    setDbTesting(true);
+    setDbStatusMsg("Syncing local data to Supabase database...");
+    const saved = await saveStudyBullStateToSupabase(nodes, appSettings, true);
+    setDbTesting(false);
+    if (saved) {
+      setDbStatusMsg("✅ Local data successfully pushed to Supabase database!");
+      showToast("success", "✓ Data Synced!", "All nodes and settings are now saved in Supabase.");
+    } else {
+      setDbStatusMsg("❌ Failed to sync to Supabase. Check credentials or connection.");
+    }
+  };
+
+  const handleDisconnectDb = () => {
+    clearSupabaseCredentials();
+    const cfg = getStoredSupabaseConfig();
+    setDbConfigState(cfg);
+    setDbUrlInput("");
+    setDbKeyInput("");
+    setDbStatusMsg("Disconnected. App is running in Local Browser Storage mode.");
+    showToast("info", "Database Disconnected", "Local storage will be used.");
   };
 
   const openDedicatedPage = (id: string | null) => {
@@ -3869,6 +3983,34 @@ export default function Home() {
             </div>
             <button
               className="outline-btn"
+              onClick={() => {
+                const cfg = getStoredSupabaseConfig();
+                setDbConfigState(cfg);
+                setDbUrlInput(cfg.url);
+                setDbKeyInput(cfg.key);
+                setDbStatusMsg(null);
+                setShowDbModal(true);
+              }}
+              title={
+                dbConfigState.isConfigured
+                  ? "Database Connected to Supabase. Click to manage."
+                  : "Database Not Connected! Click to enter Supabase credentials."
+              }
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontWeight: 700,
+                borderColor: dbConfigState.isConfigured ? "#10b981" : "#ef4444",
+                background: dbConfigState.isConfigured ? "#f0fdf4" : "#fef2f2",
+                color: dbConfigState.isConfigured ? "#15803d" : "#b91c1c",
+              }}
+            >
+              <Database size={15} />
+              {dbConfigState.isConfigured ? "🟢 DB Connected" : "🔴 Connect Database"}
+            </button>
+            <button
+              className="outline-btn"
               onClick={() =>
                 setActiveView(v => (v === "settings" ? "manager" : "settings"))
               }
@@ -3881,6 +4023,14 @@ export default function Home() {
               onClick={() => setPreviewTargetId(currentPageNode?.id || null)}
             >
               <Eye size={15} /> App Preview
+            </button>
+            <button
+              className="emerald-btn"
+              onClick={() => setShowCommitModal(true)}
+              title="Save & Commit changes with commit message"
+              style={{ fontWeight: 700 }}
+            >
+              <Upload size={15} /> 💾 Commit Changes
             </button>
             {activeView === "manager" && (
               <>
@@ -6775,6 +6925,441 @@ Requirements:
                   {confirmModal.confirmText}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* COMMIT MESSAGE & SAVE CHANGES MODAL */}
+      {showCommitModal && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setShowCommitModal(false)}
+        >
+          <div
+            className="modal-card"
+            style={{ maxWidth: 540 }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div
+                  style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: "50%",
+                    background: "rgba(16, 185, 129, 0.12)",
+                    color: "#10b981",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Upload size={20} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>
+                    💾 Commit Changes & Publish
+                  </h3>
+                  <p
+                    style={{ margin: "2px 0 0", fontSize: 12, color: "#64748b" }}
+                  >
+                    Commit message enter karein taaki changes note ke saath save aur
+                    live sync ho jayein.
+                  </p>
+                </div>
+              </div>
+              <button
+                className="close-btn"
+                onClick={() => setShowCommitModal(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ padding: "18px 20px" }}>
+              <div style={{ marginBottom: 14 }}>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "#334155",
+                    marginBottom: 6,
+                  }}
+                >
+                  📝 Commit Message (Required):
+                </label>
+                <input
+                  type="text"
+                  value={commitMsg}
+                  onChange={e => setCommitMsg(e.target.value)}
+                  placeholder='e.g. "Added 50 MCQs for Ch-1 & updated Notes"'
+                  style={{
+                    width: "100%",
+                    padding: "10px 14px",
+                    borderRadius: 8,
+                    border: "1px solid #cbd5e1",
+                    fontSize: 13,
+                    outline: "none",
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") handleCommitSubmit();
+                  }}
+                  autoFocus
+                />
+              </div>
+
+              {/* Quick Preset Commit Message Chips */}
+              <div style={{ marginBottom: 16 }}>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: "#64748b",
+                    display: "block",
+                    marginBottom: 6,
+                  }}
+                >
+                  ⚡ Quick Commit Presets (Click to select):
+                </span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {[
+                    "✨ Added New MCQs Bank",
+                    "📝 Updated Study Notes",
+                    "📂 Reorganized Folders & Sections",
+                    "⚙️ Updated App Branding & Colors",
+                    "⏱️ Updated Mock Test Timer & Settings",
+                    "🚀 Version Release Sync",
+                  ].map(preset => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setCommitMsg(preset)}
+                      style={{
+                        padding: "5px 10px",
+                        borderRadius: 16,
+                        border: "1px solid #cbd5e1",
+                        background:
+                          commitMsg === preset ? "#e0f2fe" : "#f8fafc",
+                        borderColor:
+                          commitMsg === preset ? "#0284c7" : "#cbd5e1",
+                        color: commitMsg === preset ? "#0369a1" : "#475569",
+                        fontSize: 11.5,
+                        fontWeight: 500,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Recent Commit History Log */}
+              {commitHistory.length > 0 && (
+                <div
+                  style={{
+                    background: "#f8fafc",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: 8,
+                    padding: "10px 12px",
+                    maxHeight: 120,
+                    overflowY: "auto",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: "#475569",
+                      display: "block",
+                      marginBottom: 6,
+                    }}
+                  >
+                    📜 Recent Commit History ({commitHistory.length}):
+                  </span>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                    }}
+                  >
+                    {commitHistory.slice(0, 5).map(c => (
+                      <div
+                        key={c.id}
+                        style={{
+                          fontSize: 11,
+                          display: "flex",
+                          justifyContent: "space-between",
+                          color: "#334155",
+                          borderBottom: "1px dashed #e2e8f0",
+                          paddingBottom: 3,
+                        }}
+                      >
+                        <span style={{ fontWeight: 500 }}>✓ {c.msg}</span>
+                        <span style={{ color: "#94a3b8" }}>{c.timestamp}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div
+              className="modal-footer"
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 10,
+                padding: "12px 20px",
+                borderTop: "1px solid #f1f5f9",
+              }}
+            >
+              <button
+                type="button"
+                className="outline-btn"
+                onClick={() => setShowCommitModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="emerald-btn"
+                onClick={handleCommitSubmit}
+                style={{ fontWeight: 700 }}
+              >
+                <Check size={16} /> 🚀 Commit & Sync Live
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DATABASE CONNECTION & SYNC MODAL */}
+      {showDbModal && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setShowDbModal(false)}
+        >
+          <div
+            className="modal-card"
+            style={{ maxWidth: 600 }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div
+                  style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: "50%",
+                    background: dbConfigState.isConfigured
+                      ? "rgba(16, 185, 129, 0.12)"
+                      : "rgba(239, 68, 68, 0.12)",
+                    color: dbConfigState.isConfigured ? "#10b981" : "#ef4444",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Database size={20} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>
+                    ⚡ Supabase Database Connection & Sync
+                  </h3>
+                  <p
+                    style={{ margin: "2px 0 0", fontSize: 12, color: "#64748b" }}
+                  >
+                    Deploy hone ke baad Vercel ya live domain par persistent sync ke liye Supabase credentials yahan enter karein.
+                  </p>
+                </div>
+              </div>
+              <button
+                className="close-btn"
+                onClick={() => setShowDbModal(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ padding: "18px 20px" }}>
+              {/* CURRENT STATUS BANNER */}
+              <div
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  marginBottom: 16,
+                  background: dbConfigState.isConfigured ? "#f0fdf4" : "#fef2f2",
+                  border: `1px solid ${
+                    dbConfigState.isConfigured ? "#bbf7d0" : "#fecaca"
+                  }`,
+                  color: dbConfigState.isConfigured ? "#166534" : "#991b1b",
+                  fontSize: 12,
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 10,
+                }}
+              >
+                {dbConfigState.isConfigured ? (
+                  <Check size={18} style={{ flexShrink: 0, marginTop: 2 }} />
+                ) : (
+                  <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: 2 }} />
+                )}
+                <div>
+                  <strong style={{ fontSize: 13, display: "block" }}>
+                    {dbConfigState.isConfigured
+                      ? `🟢 Connected to Supabase (${dbConfigState.source === "env" ? "Vercel Env Vars" : "Direct Admin Credentials"})`
+                      : "🔴 Database Not Connected (Running in Local Storage Only)"}
+                  </strong>
+                  <span style={{ fontSize: 11.5, opacity: 0.9, display: "block", marginTop: 2 }}>
+                    {dbConfigState.isConfigured
+                      ? "Aapke dwara kiye gaye saare changes live Supabase table me save ho rahe hain aur sabhi users ke paas instant sync honge."
+                      : "Vercel par deploy karne ke baad bina Supabase credentials ke data sirf is browser ki local memory me rahega. Live app ke sabhi users tak content pahunchane ke liye niche Supabase details dalein."}
+                  </span>
+                </div>
+              </div>
+
+              {dbStatusMsg && (
+                <div
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    marginBottom: 14,
+                    background: dbStatusMsg.startsWith("✅") ? "#f0fdf4" : "#fef2f2",
+                    border: `1px solid ${dbStatusMsg.startsWith("✅") ? "#86efac" : "#fca5a5"}`,
+                    color: dbStatusMsg.startsWith("✅") ? "#15803d" : "#b91c1c",
+                    fontSize: 12,
+                    fontWeight: 600,
+                  }}
+                >
+                  {dbStatusMsg}
+                </div>
+              )}
+
+              {/* CREDENTIALS FORM */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#334155", marginBottom: 4 }}>
+                    Supabase Project URL
+                  </label>
+                  <input
+                    type="text"
+                    className="text-input"
+                    placeholder="e.g. https://xyz.supabase.co"
+                    value={dbUrlInput}
+                    onChange={e => setDbUrlInput(e.target.value)}
+                    style={{ width: "100%", fontSize: 13 }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#334155", marginBottom: 4 }}>
+                    Supabase Anon Public Key
+                  </label>
+                  <textarea
+                    className="text-input"
+                    placeholder="eyJhYmdj... (Supabase Anon Key)"
+                    value={dbKeyInput}
+                    onChange={e => setDbKeyInput(e.target.value)}
+                    rows={2}
+                    style={{ width: "100%", fontSize: 12, fontFamily: "monospace", resize: "vertical" }}
+                  />
+                </div>
+              </div>
+
+              {/* ACTION BUTTONS */}
+              <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={handleTestAndSaveDb}
+                  disabled={dbTesting}
+                  style={{ fontWeight: 700, padding: "8px 16px" }}
+                >
+                  <Zap size={15} /> {dbTesting ? "Testing Connection..." : "Test & Connect Database (कनेक्ट करें)"}
+                </button>
+
+                {dbConfigState.isConfigured && (
+                  <button
+                    type="button"
+                    className="emerald-btn"
+                    onClick={handleForceSyncDb}
+                    disabled={dbTesting}
+                    style={{ fontWeight: 700, padding: "8px 16px" }}
+                  >
+                    <Upload size={15} /> Force Sync Local Data to Supabase
+                  </button>
+                )}
+
+                {dbConfigState.source === "local" && (
+                  <button
+                    type="button"
+                    className="outline-btn"
+                    onClick={handleDisconnectDb}
+                    style={{ color: "#ef4444", borderColor: "#fca5a5" }}
+                  >
+                    Disconnect
+                  </button>
+                )}
+              </div>
+
+              {/* VERCEL DEPLOYMENT ENVIRONMENT GUIDE */}
+              <div
+                style={{
+                  marginTop: 20,
+                  padding: "14px",
+                  borderRadius: 10,
+                  background: "#0f172a",
+                  color: "#e2e8f0",
+                  fontSize: 11.5,
+                  lineHeight: 1.6,
+                }}
+              >
+                <div style={{ fontWeight: 700, color: "#38bdf8", marginBottom: 6, fontSize: 12 }}>
+                  🚀 Vercel Environment Variables Guide (Permanent Deployment Fix)
+                </div>
+                <p style={{ margin: "0 0 8px", color: "#94a3b8" }}>
+                  Agar aap chahte hain ki Vercel par bina modal khole automatic database connect ho jaye, to Vercel Dashboard me ye 2 Environment Variables add karein:
+                </p>
+                <div style={{ fontFamily: "monospace", background: "#1e293b", padding: "8px 12px", borderRadius: 6, fontSize: 11, color: "#f1f5f9" }}>
+                  <div><b>VITE_SUPABASE_URL</b> = {dbUrlInput || "https://your-project.supabase.co"}</div>
+                  <div><b>VITE_SUPABASE_ANON_KEY</b> = {dbKeyInput ? dbKeyInput.slice(0, 20) + "..." : "your-supabase-anon-key"}</div>
+                </div>
+                <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ color: "#cbd5e1", fontSize: 11 }}>Supabase Table Name: <b>studybull_app_state</b></span>
+                  <button
+                    className="outline-btn small"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
+                      notify("Supabase SQL Schema copied!");
+                    }}
+                    style={{ background: "#334155", borderColor: "#475569", color: "#fff", fontSize: 11 }}
+                  >
+                    <Copy size={12} /> Copy SQL Schema
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div
+              className="modal-footer"
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                padding: "12px 20px",
+                borderTop: "1px solid #f1f5f9",
+              }}
+            >
+              <button
+                type="button"
+                className="outline-btn"
+                onClick={() => setShowDbModal(false)}
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

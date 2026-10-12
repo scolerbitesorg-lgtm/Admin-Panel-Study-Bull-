@@ -57,22 +57,122 @@ function normalizeSupabaseKey(raw: string | undefined): string {
   return cleaned;
 }
 
-const supabaseUrl = normalizeSupabaseUrl(
-  import.meta.env.VITE_SUPABASE_URL as string | undefined
-);
-const supabaseAnonKey = normalizeSupabaseKey(
-  import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
-);
+export function getStoredSupabaseConfig() {
+  let localUrl = "";
+  let localKey = "";
+  try {
+    localUrl = localStorage.getItem("studybull_supabase_url") || "";
+    localKey = localStorage.getItem("studybull_supabase_key") || "";
+  } catch {
+    // ignore localStorage errors
+  }
 
-export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
+  const envUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-export const supabase: SupabaseClient | null = isSupabaseConfigured
-  ? createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: false,
-      },
+  const url = normalizeSupabaseUrl(localUrl) || normalizeSupabaseUrl(envUrl);
+  const key = normalizeSupabaseKey(localKey) || normalizeSupabaseKey(envKey);
+
+  const source: "local" | "env" | "none" =
+    localUrl && localKey && url && key
+      ? "local"
+      : envUrl && envKey && url && key
+      ? "env"
+      : "none";
+
+  return { url, key, source, isConfigured: Boolean(url && key) };
+}
+
+let currentConfig = getStoredSupabaseConfig();
+export let isSupabaseConfigured = currentConfig.isConfigured;
+
+export let supabase: SupabaseClient | null = currentConfig.isConfigured
+  ? createClient(currentConfig.url, currentConfig.key, {
+      auth: { persistSession: false },
     })
   : null;
+
+export function setSupabaseCredentials(rawUrl: string, rawKey: string): { success: boolean; message: string } {
+  const normUrl = normalizeSupabaseUrl(rawUrl);
+  const normKey = normalizeSupabaseKey(rawKey);
+
+  if (!normUrl) {
+    return { success: false, message: "Invalid Supabase URL. Please copy the project URL (e.g. https://xyz.supabase.co)." };
+  }
+  if (!normKey) {
+    return { success: false, message: "Invalid Supabase Anon Key. Please paste your anon public key." };
+  }
+
+  try {
+    localStorage.setItem("studybull_supabase_url", normUrl);
+    localStorage.setItem("studybull_supabase_key", normKey);
+  } catch {
+    return { success: false, message: "Failed to write credentials to browser storage." };
+  }
+
+  currentConfig = getStoredSupabaseConfig();
+  isSupabaseConfigured = currentConfig.isConfigured;
+  supabase = createClient(normUrl, normKey, {
+    auth: { persistSession: false },
+  });
+
+  return { success: true, message: "Supabase credentials updated successfully!" };
+}
+
+export function clearSupabaseCredentials() {
+  try {
+    localStorage.removeItem("studybull_supabase_url");
+    localStorage.removeItem("studybull_supabase_key");
+  } catch {
+    // ignore
+  }
+  currentConfig = getStoredSupabaseConfig();
+  isSupabaseConfigured = currentConfig.isConfigured;
+  supabase = currentConfig.isConfigured
+    ? createClient(currentConfig.url, currentConfig.key, {
+        auth: { persistSession: false },
+      })
+    : null;
+}
+
+export async function testSupabaseConnection(): Promise<{ success: boolean; message: string }> {
+  if (!supabase) {
+    return { success: false, message: "Supabase is not configured yet. Please provide URL & Anon Key." };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from(SUPABASE_TABLE)
+      .select("id")
+      .eq("id", SUPABASE_MAIN_ROW_ID)
+      .maybeSingle();
+
+    if (error) {
+      if (error.code === "42P01" || error.message?.includes("does not exist")) {
+        return {
+          success: false,
+          message: `Table "${SUPABASE_TABLE}" does not exist in Supabase! Please run the SQL Schema in your Supabase SQL Editor.`,
+        };
+      }
+      return {
+        success: false,
+        message: `Supabase Error: ${error.message || "Could not access table"} (Code: ${error.code})`,
+      };
+    }
+
+    return {
+      success: true,
+      message: data
+        ? `Successfully connected! Existing database row found.`
+        : `Successfully connected to Supabase! (Database table is ready)`,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `Network/Connection error: ${err?.message || "Failed to connect to Supabase"}`,
+    };
+  }
+}
 
 export const SUPABASE_TABLE = "studybull_app_state";
 export const SUPABASE_MAIN_ROW_ID = "main";
