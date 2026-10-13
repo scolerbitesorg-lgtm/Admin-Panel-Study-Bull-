@@ -29,6 +29,10 @@ import {
   Search,
   Settings2,
   ShieldAlert,
+  ShieldCheck,
+  Lock,
+  Key,
+  EyeOff,
   Sparkles,
   Trash2,
   Trophy,
@@ -111,6 +115,48 @@ type Node = {
   children: Node[];
 };
 
+export type AdminRole = "developer" | "admin";
+
+export interface AdminPasscode {
+  id: string;
+  label: string;
+  code: string;
+  role: AdminRole;
+  createdAt: string;
+}
+
+export const PERMANENT_DEVELOPER_PASSCODE = "Developer@Aarav";
+
+export const DEFAULT_PASSCODES: AdminPasscode[] = [
+  {
+    id: "pass-dev-main",
+    label: "Main Developer",
+    code: PERMANENT_DEVELOPER_PASSCODE,
+    role: "developer",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  },
+  {
+    id: "pass-admin-1",
+    label: "Admin 1",
+    code: "Admin@123",
+    role: "admin",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  },
+];
+
+function mergePasscodes(existing?: AdminPasscode[], incoming?: AdminPasscode[]): AdminPasscode[] {
+  const map = new Map<string, AdminPasscode>();
+  for (const p of DEFAULT_PASSCODES) map.set(p.id, p);
+  if (existing) {
+    for (const p of existing) map.set(p.id, p);
+  }
+  if (incoming) {
+    for (const p of incoming) map.set(p.id, p);
+  }
+  return Array.from(map.values());
+}
+
+
 type UserAppSettings = {
   appName: string;
   appSubtitle: string;
@@ -129,6 +175,7 @@ type UserAppSettings = {
   maintenanceMessage: string;
   maintenanceEta: string;
   maintenanceContact: string;
+  passcodes?: AdminPasscode[];
 };
 
 const defaultAppSettings: UserAppSettings = {
@@ -150,6 +197,7 @@ const defaultAppSettings: UserAppSettings = {
     "प्रिय छात्रों, हम आपके लिए नए 500+ MCQs, मॉक टेस्ट और सर्वर स्पीड अपडेट कर रहे हैं। ऐप बहुत जल्द वापस चालू हो जाएगा।",
   maintenanceEta: "अनुमानित समय: 30 मिनट में चालू होगा",
   maintenanceContact: "अपडेट के लिए जुड़े रहें: @StudyBullOfficial",
+  passcodes: DEFAULT_PASSCODES,
 };
 
 const THEME_PRESETS = [
@@ -295,6 +343,19 @@ function countTotalMcqsInside(node: Node): number {
     own + node.children.reduce((acc, c) => acc + countTotalMcqsInside(c), 0)
   );
 }
+
+function updateNodeHtmlRecursive(list: Node[], targetId: string, newHtml: string): Node[] {
+  return list.map(n => {
+    if (n.id === targetId) {
+      return { ...n, htmlContent: newHtml };
+    }
+    if (n.children && n.children.length > 0) {
+      return { ...n, children: updateNodeHtmlRecursive(n.children, targetId, newHtml) };
+    }
+    return n;
+  });
+}
+
 
 // ============================================================================
 // BULK 500+ MCQ AUTO-DETECTOR MODAL (WITH CLEAR DETECTED QUESTIONS COUNTER)
@@ -631,7 +692,18 @@ function PlusContentToolModal({
   ) => void;
   onSaveHtml: (targetId: string, htmlCode: string) => void;
 }) {
-  const [rawText, setRawText] = useState("");
+  const [rawText, setRawText] = useState(() => {
+    if (targetNode.notesContent) return targetNode.notesContent;
+    if (targetNode.htmlContent) return targetNode.htmlContent;
+    if (targetNode.questions && targetNode.questions.length > 0) {
+      return targetNode.questions.map((q, i) => {
+        const opts = q.options.map((o, idx) => `${String.fromCharCode(65 + idx)}.. ${o}`).join("\n");
+        const correctLetter = String.fromCharCode(65 + q.correctIndex);
+        return `question ${i + 1}. ${q.question}\n${opts}\nAnd. ${correctLetter}${q.explanation ? `\nExplane. ${q.explanation}` : ""}`;
+      }).join("\n\n");
+    }
+    return "";
+  });
   const [activeTab, setActiveTab] = useState<"auto" | "mcq" | "notes" | "mock" | "html">("auto");
   const [mockDuration, setMockDuration] = useState(60);
   const [mockPosMarks, setMockPosMarks] = useState(2);
@@ -954,7 +1026,7 @@ function Preview({
   const [completedQuizzes, setCompletedQuizzes] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(3600);
   // Student App Node Tab state (for viewing direct Notes, MCQs, or Sub-Buttons inside any folder/button)
-  const [studentTab, setStudentTab] = useState<"auto" | "topics" | "notes" | "mcq" | "mock">("auto");
+  const [studentTab, setStudentTab] = useState<"auto" | "topics" | "notes" | "html" | "mcq" | "mock">("auto");
 
   const openNodeInPreview = (n: Node) => {
     setQIndex(0);
@@ -1007,13 +1079,12 @@ function Preview({
   const activeStudentTab = useMemo(() => {
     if (studentTab !== "auto") return studentTab;
     if (currentNode) {
-      if (currentNode.kind === "notes") return "notes";
-      if (currentNode.kind === "mcq") return "mcq";
+      if (currentNode.kind === "notes" || currentNode.notesContent) return "notes";
+      if (currentNode.kind === "html" || currentNode.htmlContent) return "html";
+      if (currentNode.kind === "mcq" || (currentNode.questions && currentNode.questions.length > 0)) return "mcq";
       if (currentNode.kind === "mock") return "mock";
-      if (currentNode.notesContent && visibleNodes.length === 0) return "notes";
-      if (questions.length > 0 && visibleNodes.length === 0) return "mcq";
     }
-    return "topics";
+    return visibleNodes.length > 0 ? "topics" : "notes";
   }, [studentTab, currentNode, visibleNodes, questions]);
 
   const renderUserContainerCard = (n: Node, idx: number) => {
@@ -2198,8 +2269,8 @@ function Preview({
                           <b style={{ color: textColor }}>{currentNode.title}</b>
                         </div>
 
-                        {/* Interactive Content Tabs inside Folder/Button if notes, questions, or sub-buttons exist */}
-                        {(Boolean(currentNode.notesContent) || questions.length > 0) && (
+                        {/* Interactive Content Tabs inside Folder/Button if notes, html, questions, or sub-buttons exist */}
+                        {(Boolean(currentNode.notesContent) || Boolean(currentNode.htmlContent) || questions.length > 0) && (
                           <div
                             style={{
                               display: "flex",
@@ -2227,6 +2298,16 @@ function Preview({
                                 onClick={() => setStudentTab("notes")}
                               >
                                 📖 Study Notes ✓
+                              </button>
+                            )}
+                            {Boolean(currentNode.htmlContent) && (
+                              <button
+                                className={`crumb-btn ${
+                                  activeStudentTab === "html" ? "current" : ""
+                                }`}
+                                onClick={() => setStudentTab("html")}
+                              >
+                                {"</>"} Custom Code ✓
                               </button>
                             )}
                             {questions.length > 0 && (
@@ -2292,6 +2373,37 @@ function Preview({
                             >
                               {currentNode.notesContent}
                             </div>
+                          </div>
+                        ) : (activeStudentTab === "html" || currentNode.kind === "html") && currentNode.htmlContent ? (
+                          <div
+                            style={{
+                              background: cardBg,
+                              color: textColor,
+                              padding: 15,
+                              borderRadius: 14,
+                              border: `1px solid ${cardBorder}`,
+                            }}
+                          >
+                            <span className="type-chip cyan" style={{ marginBottom: 10, display: "inline-flex" }}>
+                              {"</>"} Custom Code & Web View
+                            </span>
+                            <h3 style={{ fontSize: 14, margin: "2px 0 10px" }}>
+                              {currentNode.title}
+                            </h3>
+                            <div
+                              style={{
+                                background: settings.darkMode ? "#0f172a" : "#f8f9fc",
+                                padding: 12,
+                                borderRadius: 10,
+                                fontSize: 13,
+                                color: textColor,
+                                border: `1px solid ${cardBorder}`,
+                                overflowX: "auto",
+                              }}
+                              dangerouslySetInnerHTML={{
+                                __html: currentNode.htmlContent,
+                              }}
+                            />
                           </div>
                         ) : activeStudentTab === "mcq" && questions.length > 0 ? (
                           <div
@@ -2737,11 +2849,15 @@ export default function Home() {
   const [appSettings, setAppSettings] =
     useState<UserAppSettings>(defaultAppSettings);
 
-  // Navigation: "manager" vs "settings" (opened from Menu Button)
-  const [activeView, setActiveView] = useState<"manager" | "settings">(
-    "manager"
-  );
+  // Navigation: "manager" vs "settings" vs "create_passcode" vs "active_passcodes" (opened from Menu Button)
+  const [activeView, setActiveView] = useState<
+    "manager" | "settings" | "create_passcode" | "active_passcodes"
+  >("manager");
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // HTML Code Viewer & Live Preview Modal State
+  const [htmlCodeViewerNode, setHtmlCodeViewerNode] = useState<Node | null>(null);
+  const [editableHtml, setEditableHtml] = useState("");
 
   // Separate Page Navigation Stack inside Home Manager
   const [pageId, setPageId] = useState<string | null>(null);
@@ -2774,7 +2890,34 @@ export default function Home() {
   const [dbUrlInput, setDbUrlInput] = useState(() => getStoredSupabaseConfig().url);
   const [dbKeyInput, setDbKeyInput] = useState(() => getStoredSupabaseConfig().key);
   const [dbTesting, setDbTesting] = useState(false);
-  const [dbStatusMsg, setDbStatusMsg] = useState<string | null>(null);
+  // Security Passcode Lock & Roles State
+  const [authSession, setAuthSession] = useState<{
+    isAuthenticated: boolean;
+    role: AdminRole;
+    label: string;
+    code: string;
+  } | null>(() => {
+    try {
+      const saved = sessionStorage.getItem("studybull_admin_session");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.isAuthenticated && parsed.role) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  });
+  const [authPasscodeAttempt, setAuthPasscodeAttempt] = useState("");
+  const [authErrorMsg, setAuthErrorMsg] = useState<string | null>(null);
+  const [showAuthPasswordToggle, setShowAuthPasswordToggle] = useState(false);
+
+  // Passcode Manager Modal State
+  const [showPasscodeModal, setShowPasscodeModal] = useState(false);
+  const [newPasscodeLabel, setNewPasscodeLabel] = useState("");
+  const [newPasscodeCode, setNewPasscodeCode] = useState("");
+  const [newPasscodeRole, setNewPasscodeRole] = useState<AdminRole>("admin");
+  const [passcodeVisibilityMap, setPasscodeVisibilityMap] = useState<Record<string, boolean>>({});
 
   // Dedicated Typing Passages Manager State
   const [showPassageForm, setShowPassageForm] = useState(false);
@@ -2951,7 +3094,11 @@ export default function Home() {
         const parsedSettings = JSON.parse(
           savedSettings
         ) as Partial<UserAppSettings>;
-        setAppSettings(prev => ({ ...prev, ...parsedSettings }));
+        setAppSettings(prev => ({
+          ...prev,
+          ...parsedSettings,
+          passcodes: mergePasscodes(prev.passcodes, parsedSettings.passcodes),
+        }));
       }
     } catch {
       // ignore localStorage read errors
@@ -2972,7 +3119,8 @@ export default function Home() {
         }
         if (remote.settings && Object.keys(remote.settings).length > 0) {
           setAppSettings(prev => {
-            const merged = { ...prev, ...remote.settings };
+            const mergedPasscodes = mergePasscodes(prev.passcodes, remote.settings.passcodes);
+            const merged = { ...prev, ...remote.settings, passcodes: mergedPasscodes };
             try {
               localStorage.setItem(
                 "studybull_zero_settings_v1",
@@ -2992,7 +3140,11 @@ export default function Home() {
         if (!active) return;
         setNodes(payload.nodes);
         if (payload.settings && Object.keys(payload.settings).length > 0) {
-          setAppSettings(prev => ({ ...prev, ...payload.settings }));
+          setAppSettings(prev => ({
+            ...prev,
+            ...payload.settings,
+            passcodes: mergePasscodes(prev.passcodes, payload.settings.passcodes),
+          }));
         }
       }
     );
@@ -3277,6 +3429,144 @@ export default function Home() {
     setDbKeyInput("");
     setDbStatusMsg("Disconnected. App is running in Local Browser Storage mode.");
     showToast("info", "Database Disconnected", "Local storage will be used.");
+  };
+
+  // PASSCODE SECURITY & AUTHENTICATION HANDLERS
+  const handleAuthenticatePasscode = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const inputCode = authPasscodeAttempt.trim();
+    if (!inputCode) {
+      setAuthErrorMsg("कृपया पासकोड दर्ज करें। (Please enter passcode)");
+      return;
+    }
+
+    // Check permanent developer passcode first
+    if (inputCode === PERMANENT_DEVELOPER_PASSCODE) {
+      const session = {
+        isAuthenticated: true,
+        role: "developer" as AdminRole,
+        label: "Main Developer",
+        code: PERMANENT_DEVELOPER_PASSCODE,
+      };
+      setAuthSession(session);
+      try {
+        sessionStorage.setItem("studybull_admin_session", JSON.stringify(session));
+      } catch {
+        // ignore
+      }
+      setAuthErrorMsg(null);
+      setAuthPasscodeAttempt("");
+      showToast("success", "🔓 Welcome Developer!", "Permanent Developer Passcode Verified.");
+      return;
+    }
+
+    // Check against appSettings.passcodes list or DEFAULT_PASSCODES
+    const currentPasscodes =
+      appSettings.passcodes && appSettings.passcodes.length > 0
+        ? appSettings.passcodes
+        : DEFAULT_PASSCODES;
+
+    const matched = currentPasscodes.find(p => p.code === inputCode);
+    if (matched) {
+      const session = {
+        isAuthenticated: true,
+        role: matched.role,
+        label: matched.label,
+        code: matched.code,
+      };
+      setAuthSession(session);
+      try {
+        sessionStorage.setItem("studybull_admin_session", JSON.stringify(session));
+      } catch {
+        // ignore
+      }
+      setAuthErrorMsg(null);
+      setAuthPasscodeAttempt("");
+      showToast(
+        "success",
+        `🔓 Welcome ${matched.label}!`,
+        `Logged in as ${matched.role.toUpperCase()}`
+      );
+      return;
+    }
+
+    setAuthErrorMsg("❌ अमान्य पासकोड! (Invalid Passcode). कृपया सही पासवर्ड दर्ज करें।");
+  };
+
+  const handleLockAdminPanel = () => {
+    setAuthSession(null);
+    try {
+      sessionStorage.removeItem("studybull_admin_session");
+    } catch {
+      // ignore
+    }
+    showToast("info", "🔒 Admin Panel Locked", "Passcode required to re-enter.");
+  };
+
+  const handleCreatePasscode = () => {
+    if (!authSession || authSession.role !== "developer") {
+      showToast("error", "⛔ Access Denied!", "Only Developers can create or manage passcodes.");
+      return;
+    }
+
+    const label = newPasscodeLabel.trim();
+    const code = newPasscodeCode.trim();
+
+    if (!label) {
+      showToast("warning", "Missing Name", "Passcode Name/Label enter karein (e.g. Admin 2).");
+      return;
+    }
+    if (!code || code.length < 3) {
+      showToast("warning", "Weak Passcode", "Passcode kam se kam 3 characters ka hona chahiye.");
+      return;
+    }
+
+    const existingList =
+      appSettings.passcodes && appSettings.passcodes.length > 0
+        ? appSettings.passcodes
+        : DEFAULT_PASSCODES;
+
+    if (existingList.some(p => p.code === code) || code === PERMANENT_DEVELOPER_PASSCODE) {
+      showToast("error", "Duplicate Passcode", "Ye passcode pehle se exist karta hai. Dusra try karein.");
+      return;
+    }
+
+    const newEntry: AdminPasscode = {
+      id: `pass-${Date.now()}`,
+      label,
+      code,
+      role: newPasscodeRole,
+      createdAt: new Date().toISOString(),
+    };
+
+    const updatedPasscodes = [...existingList, newEntry];
+    updateAppSettings(
+      { passcodes: updatedPasscodes },
+      `✓ Passcode Created: "${label}"`
+    );
+    showToast("success", "✓ Passcode Created!", `New ${newPasscodeRole.toUpperCase()} passcode created for "${label}".`);
+    setNewPasscodeLabel("");
+    setNewPasscodeCode("");
+    setNewPasscodeRole("admin");
+  };
+
+  const handleDeletePasscode = (passId: string, passCode: string, passLabel: string) => {
+    if (passCode === PERMANENT_DEVELOPER_PASSCODE) {
+      showToast("error", "Action Blocked", "Permanent Developer Passcode (Developer@Aarav) delete nahi kiya ja sakta.");
+      return;
+    }
+
+    const existingList =
+      appSettings.passcodes && appSettings.passcodes.length > 0
+        ? appSettings.passcodes
+        : DEFAULT_PASSCODES;
+
+    const updated = existingList.filter(p => p.id !== passId);
+    updateAppSettings(
+      { passcodes: updated },
+      `Passcode Removed: "${passLabel}"`
+    );
+    showToast("info", "Passcode Removed", `Passcode for "${passLabel}" removed.`);
   };
 
   const openDedicatedPage = (id: string | null) => {
@@ -3808,6 +4098,149 @@ export default function Home() {
     ? findNode(nodes, editingMetaNodeId)
     : null;
 
+  // SECURITY LOCK SCREEN FOR UNAUTHENTICATED ADMIN SESSION
+  if (!authSession || !authSession.isAuthenticated) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0284c7 100%)",
+          fontFamily: "system-ui, -apple-system, sans-serif",
+          padding: 20,
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            maxWidth: 440,
+            background: "#ffffff",
+            borderRadius: 20,
+            padding: "32px 28px",
+            boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.35)",
+            textAlign: "center",
+          }}
+        >
+          {/* LOGO & SHIELD ICON */}
+          <div
+            style={{
+              width: 64,
+              height: 64,
+              borderRadius: "50%",
+              background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+              color: "#ffffff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              margin: "0 auto 16px",
+              boxShadow: "0 10px 20px rgba(37, 99, 235, 0.3)",
+            }}
+          >
+            <ShieldCheck size={36} />
+          </div>
+
+          <h2 style={{ margin: "0 0 6px", fontSize: 22, fontWeight: 800, color: "#0f172a" }}>
+            {appSettings.appName} Admin
+          </h2>
+          <p style={{ margin: "0 0 24px", fontSize: 13, color: "#64748b", lineHeight: 1.5 }}>
+            एडमिन पैनल अनलॉक करने के लिए अपना <b>Developer</b> या <b>Admin</b> पासकोड दर्ज करें।
+          </p>
+
+          <form onSubmit={handleAuthenticatePasscode} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ position: "relative", textAlign: "left" }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 }}>
+                🔑 Access Passcode / पासवर्ड
+              </label>
+              <div style={{ position: "relative" }}>
+                <input
+                  type={showAuthPasswordToggle ? "text" : "password"}
+                  placeholder="Enter passcode (e.g. Developer@Aarav)"
+                  value={authPasscodeAttempt}
+                  onChange={e => {
+                    setAuthPasscodeAttempt(e.target.value);
+                    if (authErrorMsg) setAuthErrorMsg(null);
+                  }}
+                  autoFocus
+                  style={{
+                    width: "100%",
+                    padding: "12px 42px 12px 14px",
+                    borderRadius: 10,
+                    border: authErrorMsg ? "2px solid #ef4444" : "1.5px solid #cbd5e1",
+                    fontSize: 14,
+                    outline: "none",
+                    boxSizing: "border-box",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAuthPasswordToggle(!showAuthPasswordToggle)}
+                  style={{
+                    position: "absolute",
+                    right: 12,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "none",
+                    border: "none",
+                    color: "#64748b",
+                    cursor: "pointer",
+                    padding: 4,
+                  }}
+                >
+                  {showAuthPasswordToggle ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+
+            {authErrorMsg && (
+              <div
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  background: "#fef2f2",
+                  border: "1px solid #fecaca",
+                  color: "#991b1b",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  textAlign: "left",
+                }}
+              >
+                {authErrorMsg}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              style={{
+                width: "100%",
+                padding: "13px",
+                borderRadius: 10,
+                background: "linear-gradient(135deg, #10b981, #059669)",
+                color: "#ffffff",
+                fontSize: 14,
+                fontWeight: 700,
+                border: "none",
+                cursor: "pointer",
+                boxShadow: "0 4px 12px rgba(16, 185, 129, 0.3)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+              }}
+            >
+              <Lock size={16} /> Unlock Admin Panel (प्रवेश करें)
+            </button>
+          </form>
+
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid #f1f5f9", fontSize: 11.5, color: "#94a3b8" }}>
+            🔒 Protected System • Permanent Dev Passcode: <b>Developer@Aarav</b>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       {/* SLIDE-OUT MENU DRAWER WITH SETTINGS BUTTON */}
@@ -3885,6 +4318,38 @@ export default function Home() {
             </button>
 
             <button
+              className={`menu-nav-btn ${
+                activeView === "create_passcode" ? "active" : ""
+              }`}
+              onClick={() => {
+                setMenuOpen(false);
+                if (authSession?.role !== "developer") {
+                  showToast("error", "⛔ Access Denied!", "केवल Developer ही पासकोड बना सकते हैं।");
+                  return;
+                }
+                setActiveView("create_passcode");
+              }}
+            >
+              <Key size={18} /> ➕ Create New Passcode
+            </button>
+
+            <button
+              className={`menu-nav-btn ${
+                activeView === "active_passcodes" ? "active" : ""
+              }`}
+              onClick={() => {
+                setMenuOpen(false);
+                if (authSession?.role !== "developer") {
+                  showToast("error", "⛔ Access Denied!", "केवल Developer ही पासकोड देख सकते हैं।");
+                  return;
+                }
+                setActiveView("active_passcodes");
+              }}
+            >
+              <ShieldCheck size={18} /> 📋 Active Passcodes List
+            </button>
+
+            <button
               className="menu-nav-btn"
               onClick={() => {
                 setMenuOpen(false);
@@ -3958,11 +4423,19 @@ export default function Home() {
               <h1>
                 {activeView === "settings"
                   ? `${appSettings.appName} — Settings & Admin Control`
+                  : activeView === "create_passcode"
+                  ? `${appSettings.appName} — Create New Passcode`
+                  : activeView === "active_passcodes"
+                  ? `${appSettings.appName} — Active Passcodes List`
                   : `${appSettings.appName} — Home Page Manager`}
               </h1>
               <p>
                 {activeView === "settings"
                   ? "Customize User App Name, Logo, Theme Colors & Maintenance Mode"
+                  : activeView === "create_passcode"
+                  ? "Generate new Admin or Developer credentials securely"
+                  : activeView === "active_passcodes"
+                  ? "Manage active admin & developer passcodes with role permissions"
                   : "Separate page per Button & Folder • Bulk 500+ MCQ Auto-Detector"}
               </p>
             </div>
@@ -4024,13 +4497,44 @@ export default function Home() {
             >
               <Eye size={15} /> App Preview
             </button>
-            <button
-              className="emerald-btn"
-              onClick={() => setShowCommitModal(true)}
-              title="Save & Commit changes with commit message"
-              style={{ fontWeight: 700 }}
+
+
+            {/* ROLE BADGE & PASSCODE MANAGER BUTTONS */}
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "4px 10px",
+                borderRadius: 8,
+                fontSize: 12,
+                fontWeight: 700,
+                background: authSession?.role === "developer" ? "#f3e8ff" : "#e0f2fe",
+                color: authSession?.role === "developer" ? "#6b21a8" : "#0369a1",
+                border: authSession?.role === "developer" ? "1px solid #d8b4fe" : "1px solid #bae6fd",
+              }}
+              title={`Logged in as ${authSession?.label} (${authSession?.role})`}
             >
-              <Upload size={15} /> 💾 Commit Changes
+              {authSession?.role === "developer" ? <ShieldCheck size={14} /> : <Lock size={14} />}
+              <span>{authSession?.role === "developer" ? "👑 Developer" : "👤 Admin"}</span>
+            </div>
+
+
+
+            <button
+              className="outline-btn"
+              onClick={handleLockAdminPanel}
+              title="Lock Admin Panel Session"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                color: "#dc2626",
+                borderColor: "#fca5a5",
+                background: "#fef2f2",
+              }}
+            >
+              <Lock size={15} /> Lock
             </button>
             {activeView === "manager" && (
               <>
@@ -4056,7 +4560,279 @@ export default function Home() {
         </header>
 
         <div className="content-wrap">
-          {activeView === "settings" ? (
+          {(activeView === "create_passcode" || activeView === "active_passcodes") && authSession?.role !== "developer" ? (
+            <div className="panel" style={{ maxWidth: 520, margin: "60px auto", padding: 40, textAlign: "center" }}>
+              <div style={{ fontSize: 48, marginBottom: 16 }}>⛔</div>
+              <h2>Access Denied (Developer Exclusive)</h2>
+              <p style={{ color: "#64748b", margin: "10px 0 20px" }}>
+                पासकोड बनाने और देखने का अधिकार केवल <b>Developer</b> के पास है। सामान्य Admin इस पेज को एक्सेस नहीं कर सकते।
+              </p>
+              <button className="primary-btn" onClick={() => setActiveView("manager")}>
+                <LayoutGrid size={15} /> Back to Home Manager
+              </button>
+            </div>
+          ) : activeView === "create_passcode" ? (
+            /* =================================================================
+               CREATE PASSCODE DEDICATED PAGE
+               ================================================================= */
+            <div style={{ maxWidth: 720, margin: "0 auto", paddingBottom: 40 }}>
+              <div className="page-banner">
+                <div className="page-banner-left">
+                  <div className="page-big-icon purple" style={{ background: "rgba(147, 51, 234, 0.15)", color: "#9333ea" }}>
+                    <Key size={26} />
+                  </div>
+                  <div className="page-banner-info">
+                    <span className="section-kicker">
+                      DEVELOPER EXCLUSIVE • CREATE NEW PASSCODE
+                    </span>
+                    <h2>Create Passcode</h2>
+                    <p>
+                      Generate new Admin or Developer credentials with custom label and role permissions.
+                    </p>
+                  </div>
+                </div>
+                <div className="page-banner-actions">
+                  <button
+                    className="outline-btn"
+                    onClick={() => setActiveView("active_passcodes")}
+                  >
+                    <ShieldCheck size={15} /> View Active Passcodes
+                  </button>
+                  <button
+                    className="outline-btn"
+                    onClick={() => setActiveView("manager")}
+                  >
+                    <LayoutGrid size={15} /> Back to Home Manager
+                  </button>
+                </div>
+              </div>
+
+              <div className="panel" style={{ padding: 24 }}>
+                <div className="form-stack">
+                  <label>
+                    Passcode Label / Name
+                    <input
+                      type="text"
+                      className="text-input"
+                      placeholder="e.g. Sub-Admin Content Manager"
+                      value={newPasscodeLabel}
+                      onChange={e => setNewPasscodeLabel(e.target.value)}
+                    />
+                  </label>
+
+                  <label>
+                    Role / अनुमति का प्रकार
+                    <select
+                      className="text-input"
+                      value={newPasscodeRole}
+                      onChange={e => setNewPasscodeRole(e.target.value as AdminRole)}
+                    >
+                      <option value="admin">👤 Admin (कंटेंट एडिटिंग ओनली)</option>
+                      <option value="developer">👑 Developer (फुल एक्सेस + पासकोड)</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    Passcode Key / पासवर्ड
+                    <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                      <input
+                        type="text"
+                        className="text-input"
+                        placeholder="e.g. Secret@999"
+                        value={newPasscodeCode}
+                        onChange={e => setNewPasscodeCode(e.target.value)}
+                        style={{ fontFamily: "monospace" }}
+                      />
+                      <button
+                        type="button"
+                        className="outline-btn"
+                        onClick={() => {
+                          const randomCode = `${newPasscodeRole === "developer" ? "Dev" : "Admin"}@${Math.floor(1000 + Math.random() * 9000)}`;
+                          setNewPasscodeCode(randomCode);
+                        }}
+                        style={{ whiteSpace: "nowrap" }}
+                      >
+                        🎲 Random
+                      </button>
+                    </div>
+                  </label>
+
+                  <button
+                    type="button"
+                    className="primary-btn"
+                    onClick={() => {
+                      handleCreatePasscode();
+                      setActiveView("active_passcodes");
+                    }}
+                    style={{ width: "100%", fontWeight: 700, padding: 12, justifyContent: "center", marginTop: 12 }}
+                  >
+                    <Check size={16} /> Save & View Active Passcodes
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : activeView === "active_passcodes" ? (
+            /* =================================================================
+               ACTIVE PASSCODES LIST DEDICATED PAGE
+               ================================================================= */
+            <div style={{ maxWidth: 960, margin: "0 auto", paddingBottom: 40 }}>
+              <div className="page-banner">
+                <div className="page-banner-left">
+                  <div className="page-big-icon purple" style={{ background: "rgba(147, 51, 234, 0.15)", color: "#9333ea" }}>
+                    <ShieldCheck size={26} />
+                  </div>
+                  <div className="page-banner-info">
+                    <span className="section-kicker">
+                      DEVELOPER EXCLUSIVE • ACTIVE CREDENTIALS
+                    </span>
+                    <h2>Active Passcodes List</h2>
+                    <p>
+                      Manage all active admin and developer passcodes, copy keys, or delete credentials.
+                    </p>
+                  </div>
+                </div>
+                <div className="page-banner-actions">
+                  <button
+                    className="primary-btn"
+                    onClick={() => setActiveView("create_passcode")}
+                  >
+                    <CirclePlus size={15} /> + Create New Passcode
+                  </button>
+                  <button
+                    className="outline-btn"
+                    onClick={() => setActiveView("manager")}
+                  >
+                    <LayoutGrid size={15} /> Back to Home Manager
+                  </button>
+                </div>
+              </div>
+
+              {/* PERMANENT DEVELOPER PASSCODE BANNER */}
+              <div
+                style={{
+                  padding: "16px 20px",
+                  borderRadius: 14,
+                  marginBottom: 24,
+                  background: "linear-gradient(135deg, #f3e8ff 0%, #ede9fe 100%)",
+                  border: "1px solid #d8b4fe",
+                  color: "#581c87",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                }}
+              >
+                <div style={{ width: 42, height: 42, borderRadius: "50%", background: "#7e22ce", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <ShieldCheck size={24} />
+                </div>
+                <div>
+                  <strong style={{ fontSize: 14 }}>👑 Main Permanent Developer Passcode:</strong>
+                  <div style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 800, marginTop: 4, color: "#6b21a8" }}>
+                    {PERMANENT_DEVELOPER_PASSCODE}
+                  </div>
+                  <small style={{ display: "block", marginTop: 4, color: "#7e22ce", opacity: 0.9, fontSize: 12 }}>
+                    यह मुख्य परमानेंट डेवलपर पासवर्ड है जो हमेशा काम करेगा। इसे बदला या डिलीट नहीं किया जा सकता।
+                  </small>
+                </div>
+              </div>
+
+              <div className="panel" style={{ padding: 20 }}>
+                <div className="panel-head" style={{ marginBottom: 16 }}>
+                  <div>
+                    <span className="section-kicker">CREDENTIALS DIRECTORY</span>
+                    <h2>All Active Passcodes ({ (appSettings.passcodes || DEFAULT_PASSCODES).length })</h2>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {(appSettings.passcodes && appSettings.passcodes.length > 0
+                    ? appSettings.passcodes
+                    : DEFAULT_PASSCODES
+                  ).map(item => {
+                    const isVisible = passcodeVisibilityMap[item.id] || false;
+                    const isPermanent = item.code === PERMANENT_DEVELOPER_PASSCODE;
+                    return (
+                      <div
+                        key={item.id}
+                        style={{
+                          padding: "12px 14px",
+                          borderRadius: 12,
+                          background: "#ffffff",
+                          border: "1px solid #e2e8f0",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 12,
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "flex-start", gap: 10, minWidth: 0 }}>
+                          <span
+                            style={{
+                              padding: "3px 8px",
+                              borderRadius: 6,
+                              fontSize: 10.5,
+                              fontWeight: 700,
+                              background: item.role === "developer" ? "#f3e8ff" : "#e0f2fe",
+                              color: item.role === "developer" ? "#6b21a8" : "#0369a1",
+                              border: item.role === "developer" ? "1px solid #d8b4fe" : "1px solid #bae6fd",
+                              flexShrink: 0,
+                              marginTop: 2,
+                            }}
+                          >
+                            {item.role === "developer" ? "👑 Developer" : "👤 Admin"}
+                          </span>
+                          <div style={{ minWidth: 0 }}>
+                            <strong style={{ fontSize: 13, color: "#0f172a", display: "block" }}>
+                              {item.label} {isPermanent && "(Permanent)"}
+                            </strong>
+                            <span style={{ fontSize: 12, fontFamily: "monospace", color: "#64748b" }}>
+                              {isVisible ? item.code : "••••••••••••"}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <button
+                            type="button"
+                            className="outline-btn small"
+                            onClick={() =>
+                              setPasscodeVisibilityMap(prev => ({
+                                ...prev,
+                                [item.id]: !prev[item.id],
+                              }))
+                            }
+                            title={isVisible ? "Hide Passcode" : "Show Passcode"}
+                          >
+                            {isVisible ? <EyeOff size={14} /> : <Eye size={14} />}
+                          </button>
+                          <button
+                            type="button"
+                            className="outline-btn small"
+                            onClick={() => {
+                              void navigator.clipboard.writeText(item.code);
+                              showToast("info", "Copied", `Passcode for ${item.label} copied!`);
+                            }}
+                            title="Copy Passcode"
+                          >
+                            <Copy size={14} />
+                          </button>
+                          {!isPermanent && (
+                            <button
+                              type="button"
+                              className="danger-btn small"
+                              onClick={() => handleDeletePasscode(item.id, item.code, item.label)}
+                              title="Delete Passcode"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : activeView === "settings" ? (
             /* =================================================================
                SETTINGS PAGE: USER APP BRANDING, THEME COLORS & MAINTENANCE MODE
                ================================================================= */
@@ -5001,9 +5777,9 @@ Requirements:
                           onClick={() =>
                             openPlusContentToolForNode(currentPageNode.id)
                           }
-                          title="(+) Add Content to this container"
+                          title="Add or Edit Content in this container"
                         >
-                          <Plus size={14} /> (+) Content
+                          <Pencil size={14} /> {currentPageNode.notesContent || currentPageNode.htmlContent || (currentPageNode.questions && currentPageNode.questions.length > 0) ? "✏️ Edit Content" : "(+) Content"}
                         </button>
                       </>
                     )}
@@ -5200,6 +5976,40 @@ Requirements:
                               )}
                             </div>
 
+                             {/* CONTAINER DATA CONTENTS SUMMARY */}
+                             {["button", "folder", "section"].includes(item.kind) && item.children.length > 0 && (
+                               <div style={{ margin: "8px 0", padding: "8px 10px", background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 11.5 }}>
+                                 <strong style={{ display: "block", color: "#475569", marginBottom: 4 }}>📦 Container Contents ({item.children.length}):</strong>
+                                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                                   {item.children.slice(0, 5).map(c => (
+                                     <span key={c.id} style={{ background: "#fff", padding: "2px 6px", borderRadius: 4, border: "1px solid #cbd5e1", color: "#334155", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                                       <span>{c.icon}</span> {c.title}
+                                     </span>
+                                   ))}
+                                   {item.children.length > 5 && (
+                                     <span style={{ color: "#64748b", padding: "2px 4px" }}>+{item.children.length - 5} more</span>
+                                   )}
+                                 </div>
+                               </div>
+                             )}
+
+                             {item.htmlContent && (
+                               <div style={{ margin: "8px 0", display: "flex", alignItems: "center", justifyContent: "space-between", background: "#f0fdf4", padding: "6px 10px", borderRadius: 8, border: "1px solid #bbf7d0", flexWrap: "wrap", gap: 6 }}>
+                                 <span style={{ fontSize: 11, fontWeight: 700, color: "#166534" }}>{"</>"} Custom HTML Code Included</span>
+                                 <button
+                                   type="button"
+                                   className="outline-btn small"
+                                   onClick={() => {
+                                     setHtmlCodeViewerNode(item);
+                                     setEditableHtml(item.htmlContent || "");
+                                   }}
+                                   style={{ borderColor: "#166534", color: "#166534", background: "#fff" }}
+                                 >
+                                   <Eye size={12} /> View & Edit Code
+                                 </button>
+                               </div>
+                             )}
+
                             <div className="item-card-footer">
                               <div style={{ display: "flex", gap: 3 }}>
                                 <button
@@ -5236,9 +6046,9 @@ Requirements:
                                 <button
                                   className="emerald-btn small"
                                   onClick={() => openPlusContentToolForNode(item.id)}
-                                  title="Add MCQs, Notes, Mock Test or Web Code into this container"
+                                  title="Add or Edit MCQs, Notes, Mock Test or Web Code into this container"
                                 >
-                                  <Plus size={13} /> (+) Content
+                                  <Pencil size={13} /> {item.notesContent || item.htmlContent || (item.questions && item.questions.length > 0) ? "✏️ Edit Content" : "(+) Content"}
                                 </button>
                                 <button
                                   className="primary-btn small"
@@ -6688,6 +7498,95 @@ Requirements:
           onUpdateNodes={saveStructure}
           onNotify={notify}
         />
+      )}
+
+      {/* HTML CODE & LIVE INTERACTIVE EDIT & VIEW MODAL */}
+      {htmlCodeViewerNode && (
+        <div className="modal-backdrop" onClick={() => setHtmlCodeViewerNode(null)}>
+          <div className="create-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 840, width: "95%", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
+            <div className="modal-head">
+              <div>
+                <span className="section-kicker">{"</>"} CUSTOM WEB & HTML EDITOR & VIEWER</span>
+                <h2>{htmlCodeViewerNode.title}</h2>
+              </div>
+              <button className="close-button" onClick={() => setHtmlCodeViewerNode(null)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, margin: "10px 0" }}>
+              <span className="type-chip cyan">Edit HTML & Live Mobile Preview</span>
+            </div>
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 16, flex: 1, minHeight: 320, overflowY: "auto" }}>
+              {/* EDITABLE CODE */}
+              <div style={{ flex: "1 1 320px", display: "flex", flexDirection: "column", gap: 6, minWidth: 260 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, fontWeight: 700, color: "#475569" }}>
+                  <span>Edit HTML Source Code</span>
+                  <button
+                    type="button"
+                    className="outline-btn small"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(editableHtml);
+                      showToast("info", "Copied", "HTML code copied to clipboard!");
+                    }}
+                  >
+                    <Copy size={12} /> Copy
+                  </button>
+                </div>
+                <textarea
+                  className="text-input"
+                  value={editableHtml}
+                  onChange={e => setEditableHtml(e.target.value)}
+                  placeholder="Write or edit HTML code..."
+                  style={{ fontFamily: "monospace", fontSize: 12, flex: 1, minHeight: 240, resize: "vertical", background: "#f8fafc" }}
+                />
+              </div>
+
+              {/* LIVE RENDER PREVIEW */}
+              <div style={{ flex: "1 1 320px", display: "flex", flexDirection: "column", gap: 6, minWidth: 260 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>
+                  Live Interactive Mobile Preview
+                </div>
+                <div
+                  style={{
+                    flex: 1,
+                    minHeight: 240,
+                    background: "#fff",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 10,
+                    padding: 14,
+                    overflowY: "auto",
+                    wordBreak: "break-word",
+                  }}
+                  dangerouslySetInnerHTML={{
+                    __html: editableHtml || `<div>${htmlCodeViewerNode.title}</div>`,
+                  }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+              <button type="button" className="outline-btn" onClick={() => setHtmlCodeViewerNode(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={() => {
+                  if (!htmlCodeViewerNode) return;
+                  const updatedNodes = updateNodeHtmlRecursive(nodes, htmlCodeViewerNode.id, editableHtml);
+                  setNodes(updatedNodes);
+                  saveStructure(updatedNodes);
+                  showToast("success", "Saved!", "HTML code updated & saved successfully.");
+                  setHtmlCodeViewerNode(null);
+                }}
+              >
+                <Check size={14} /> Save Changes & Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* UNIVERSAL CONFIRMATION MODAL (CONFIRM BEFORE ADD & DELETE UPDATE) */}
