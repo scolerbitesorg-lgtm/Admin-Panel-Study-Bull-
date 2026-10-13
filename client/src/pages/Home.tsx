@@ -69,6 +69,7 @@ import {
   SpeedCalculationView,
   CalcMode,
 } from "@/components/SpeedCalculationView";
+import SandboxedHtmlView from "@/components/SandboxedHtmlView";
 
 type Kind =
   | "button"
@@ -248,6 +249,144 @@ const THEME_PRESETS = [
 // Zero-data start: No pre-populated questions or buttons.
 // Everything is added from scratch by the Admin and synced to Supabase & User App.
 const defaultQuestions: McqQuestion[] = [];
+
+const MOODMOJI_PRISTINE_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MoodMoji - Emoji Search & Copy</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #0f172a; color: #f8fafc; padding: 16px; min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+    .container { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 14px; }
+    header { text-align: center; margin-bottom: 4px; }
+    h1 { font-size: 22px; font-weight: 800; background: linear-gradient(135deg, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    p { font-size: 13px; color: #94a3b8; margin-top: 4px; }
+    .search-box { width: 100%; padding: 12px 16px; border-radius: 12px; border: 1px solid #334155; background: #1e293b; color: #fff; font-size: 15px; outline: none; transition: border 0.2s; }
+    .search-box:focus { border-color: #38bdf8; }
+    .categories { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+    .categories::-webkit-scrollbar { display: none; }
+    .cat-btn { background: #1e293b; border: 1px solid #334155; color: #cbd5e1; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: all 0.2s; }
+    .cat-btn.active, .cat-btn:hover { background: #38bdf8; color: #0f172a; border-color: #38bdf8; }
+    .emoji-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; background: #1e293b; padding: 14px; border-radius: 14px; border: 1px solid #334155; max-height: 360px; overflow-y: auto; }
+    .emoji-item { background: #0f172a; border: 1px solid #334155; border-radius: 10px; font-size: 26px; height: 50px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform 0.1s, background 0.2s; user-select: none; }
+    .emoji-item:active { transform: scale(0.92); background: #334155; }
+    .toast { position: fixed; bottom: 24px; background: #22c55e; color: #fff; padding: 10px 20px; border-radius: 30px; font-size: 13px; font-weight: 700; box-shadow: 0 4px 12px rgba(0,0,0,0.3); opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>MoodMoji 😊</h1>
+      <p>Tap any emoji to copy to clipboard instantly!</p>
+    </header>
+    <input type="text" id="search" class="search-box" placeholder="Search emojis (e.g. smile, fire, heart)...">
+    <div class="categories" id="categories">
+      <button class="cat-btn active" data-cat="all">All</button>
+      <button class="cat-btn" data-cat="smileys">Smileys</button>
+      <button class="cat-btn" data-cat="animals">Animals</button>
+      <button class="cat-btn" data-cat="food">Food</button>
+      <button class="cat-btn" data-cat="activities">Activities</button>
+      <button class="cat-btn" data-cat="travel">Travel</button>
+      <button class="cat-btn" data-cat="objects">Objects</button>
+      <button class="cat-btn" data-cat="symbols">Symbols</button>
+    </div>
+    <div class="emoji-grid" id="grid"></div>
+  </div>
+  <div class="toast" id="toast">Copied to clipboard! ✨</div>
+
+  <script>
+    const emojis = [
+      {e: "😀", c: "smileys", n: "grinning face"}, {e: "😃", c: "smileys", n: "smiley"}, {e: "😄", c: "smileys", n: "smile"},
+      {e: "😁", c: "smileys", n: "grin"}, {e: "😆", c: "smileys", n: "laughing"}, {e: "😅", c: "smileys", n: "sweat smile"},
+      {e: "🤣", c: "smileys", n: "rofl"}, {e: "😂", c: "smileys", n: "joy"}, {e: "🙂", c: "smileys", n: "slightly smiling"},
+      {e: "😉", c: "smileys", n: "wink"}, {e: "😊", c: "smileys", n: "blush"}, {e: "😇", c: "smileys", n: "innocent"},
+      {e: "😍", c: "smileys", n: "heart eyes"}, {e: "🤩", c: "smileys", n: "star struck"}, {e: "😘", c: "smileys", n: "kissing"},
+      {e: "😋", c: "smileys", n: "yum"}, {e: "😎", c: "smileys", n: "sunglasses"}, {e: "🥳", c: "smileys", n: "party"},
+      {e: "🐶", c: "animals", n: "dog"}, {e: "🐱", c: "animals", n: "cat"}, {e: "🐭", c: "animals", n: "mouse"},
+      {e: "🐹", c: "animals", n: "hamster"}, {e: "🐰", c: "animals", n: "rabbit"}, {e: "🦊", c: "animals", n: "fox"},
+      {e: "🐻", c: "animals", n: "bear"}, {e: "🐼", c: "animals", n: "panda"}, {e: "🐨", c: "animals", n: "koala"},
+      {e: "🐯", c: "animals", n: "tiger"}, {e: "🦁", c: "animals", n: "lion"}, {e: "🐮", c: "animals", n: "cow"},
+      {e: "🍎", c: "food", n: "apple"}, {e: "🍐", c: "food", n: "pear"}, {e: "🍊", c: "food", n: "tangerine"},
+      {e: "🍋", c: "food", n: "lemon"}, {e: "🍌", c: "food", n: "banana"}, {e: "🍉", c: "food", n: "watermelon"},
+      {e: "🍇", c: "food", n: "grapes"}, {e: "🍓", c: "food", n: "strawberry"}, {e: "🍒", c: "food", n: "cherries"},
+      {e: "🍕", c: "food", n: "pizza"}, {e: "🍔", c: "food", n: "burger"}, {e: "🍟", c: "food", n: "fries"},
+      {e: "⚽", c: "activities", n: "soccer"}, {e: "🏀", c: "activities", n: "basketball"}, {e: "🏈", c: "activities", n: "football"},
+      {e: "⚾", c: "activities", n: "baseball"}, {e: "🎾", c: "activities", n: "tennis"}, {e: "🏐", c: "activities", n: "volleyball"},
+      {e: "🚗", c: "travel", n: "car"}, {e: "🚕", c: "travel", n: "taxi"}, {e: "🚙", c: "travel", n: "suv"},
+      {e: "🚌", c: "travel", n: "bus"}, {e: "🚀", c: "travel", n: "rocket"}, {e: "✈️", c: "travel", n: "airplane"},
+      {e: "💡", c: "objects", n: "bulb"}, {e: "💻", c: "objects", n: "laptop"}, {e: "📱", c: "objects", n: "phone"},
+      {e: "⌚", c: "objects", n: "watch"}, {e: "📷", c: "objects", n: "camera"}, {e: "📚", c: "objects", n: "books"},
+      {e: "❤️", c: "symbols", n: "heart"}, {e: "🔥", c: "symbols", n: "fire"}, {e: "⭐", c: "symbols", n: "star"},
+      {e: "✨", c: "symbols", n: "sparkles"}, {e: "💯", c: "symbols", n: "100"}, {e: "🚀", c: "symbols", n: "space"}
+    ];
+
+    let currentCat = "all";
+    let searchQuery = "";
+
+    const grid = document.getElementById("grid");
+    const searchInput = document.getElementById("search");
+    const toast = document.getElementById("toast");
+
+    function render() {
+      const filtered = emojis.filter(item => {
+        const matchesCat = currentCat === "all" || item.c === currentCat;
+        const matchesQuery = item.n.toLowerCase().includes(searchQuery.toLowerCase()) || item.e.includes(searchQuery);
+        return matchesCat && matchesQuery;
+      });
+
+      if (filtered.length === 0) {
+        grid.innerHTML = '<div style="grid-column: span 5; text-align: center; color: #94a3b8; font-size: 13px; padding: 20px;">No emojis found</div>';
+        return;
+      }
+
+      grid.innerHTML = filtered.map(item => \`
+        <div class="emoji-item" onclick="copyEmoji('\${item.e}')" title="\${item.n}">\${item.e}</div>
+      \`).join("");
+    }
+
+    function copyEmoji(emoji) {
+      navigator.clipboard.writeText(emoji).catch(() => {});
+      toast.classList.add("show");
+      setTimeout(() => toast.classList.remove("show"), 1500);
+    }
+
+    searchInput.addEventListener("input", e => {
+      searchQuery = e.target.value.trim();
+      render();
+    });
+
+    document.querySelectorAll(".cat-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".cat-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentCat = btn.getAttribute("data-cat");
+        render();
+      });
+    });
+
+    render();
+  </script>
+</body>
+</html>`;
+
+function sanitizeMoodMojiNodes(items: Node[]): Node[] {
+  return items.map(node => {
+    let updatedHtml = node.htmlContent;
+    if (node.title && node.title.toLowerCase().includes("moodmoji")) {
+      if (!updatedHtml || updatedHtml.trim().startsWith("var ") || !updatedHtml.includes("<!DOCTYPE html>")) {
+        updatedHtml = MOODMOJI_PRISTINE_HTML;
+      }
+    }
+    return {
+      ...node,
+      htmlContent: updatedHtml,
+      children: node.children && node.children.length > 0 ? sanitizeMoodMojiNodes(node.children) : node.children,
+    };
+  });
+}
 
 const seed: Node[] = [];
 
@@ -980,6 +1119,7 @@ function Preview({
   onClose,
   onUpdateNodes,
   onNotify,
+  isStandalone,
 }: {
   nodes: Node[];
   settings: UserAppSettings;
@@ -987,6 +1127,7 @@ function Preview({
   onClose: () => void;
   onUpdateNodes?: (updated: Node[], msg?: string) => void;
   onNotify?: (msg: string) => void;
+  isStandalone?: boolean;
 }) {
   const [currentStack, setCurrentStack] = useState<Node[]>(() => {
     if (initialNodeId) {
@@ -1200,43 +1341,24 @@ function Preview({
   const textColor = settings.darkMode ? "#f8fafc" : "#19233d";
   const subTextColor = settings.darkMode ? "#94a3b8" : "#8d96a5";
 
-  return (
-    <div className="preview-overlay" onClick={onClose}>
-      <div className="preview-shell" onClick={e => e.stopPropagation()}>
-        <div className="preview-top">
-          <div>
-            <span className="section-kicker">LIVE STUDENT APP PREVIEW</span>
-            <h2>{settings.appName} Mobile App</h2>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {settings.maintenanceMode && (
-              <button
-                className="outline-btn small"
-                onClick={() => setBypassMaintenance(b => !b)}
-                title="Toggle between Maintenance Screen and Admin Bypass"
-              >
-                {bypassMaintenance
-                  ? "Show Maintenance Screen"
-                  : "Admin Bypass App"}
-              </button>
-            )}
-            <button
-              className="close-button"
-              onClick={onClose}
-              title="Close preview"
-            >
-              <X size={18} />
-            </button>
-          </div>
-        </div>
-
-        <div
-          className="phone-frame"
-          style={{
-            background: settings.darkMode ? "#0f172a" : settings.appBgColor,
-            color: textColor,
-          }}
-        >
+  const phoneFrame = (
+    <div
+      className="phone-frame"
+      style={{
+        background: settings.darkMode ? "#0f172a" : settings.appBgColor,
+        color: textColor,
+        ...(isStandalone
+          ? {
+              width: "100%",
+              maxWidth: 480,
+              minHeight: "100vh",
+              borderRadius: 0,
+              border: "none",
+              boxShadow: "0 0 25px rgba(0,0,0,0.08)",
+            }
+          : {}),
+      }}
+    >
           <div className="phone-status">
             <span>9:41 AM</span>
             <span>5G • 100%</span>
@@ -2061,12 +2183,10 @@ function Preview({
                         <h3 style={{ fontSize: 14, margin: "2px 0 10px" }}>
                           {currentNode.title}
                         </h3>
-                        <div
-                          dangerouslySetInnerHTML={{
-                            __html:
-                              currentNode.htmlContent ||
-                              `<div>${currentNode.title}</div>`,
-                          }}
+                        <SandboxedHtmlView
+                          htmlContent={currentNode.htmlContent}
+                          title={currentNode.title}
+                          minHeight={450}
                         />
                       </div>
                     ) : currentNode.kind === "typing" ? (
@@ -2374,7 +2494,7 @@ function Preview({
                               {currentNode.notesContent}
                             </div>
                           </div>
-                        ) : (activeStudentTab === "html" || currentNode.kind === "html") && currentNode.htmlContent ? (
+                        ) : (activeStudentTab === "html" || currentNode.kind === "html") ? (
                           <div
                             style={{
                               background: cardBg,
@@ -2390,19 +2510,10 @@ function Preview({
                             <h3 style={{ fontSize: 14, margin: "2px 0 10px" }}>
                               {currentNode.title}
                             </h3>
-                            <div
-                              style={{
-                                background: settings.darkMode ? "#0f172a" : "#f8f9fc",
-                                padding: 12,
-                                borderRadius: 10,
-                                fontSize: 13,
-                                color: textColor,
-                                border: `1px solid ${cardBorder}`,
-                                overflowX: "auto",
-                              }}
-                              dangerouslySetInnerHTML={{
-                                __html: currentNode.htmlContent,
-                              }}
+                            <SandboxedHtmlView
+                              htmlContent={currentNode.htmlContent}
+                              title={currentNode.title}
+                              minHeight={480}
                             />
                           </div>
                         ) : activeStudentTab === "mcq" && questions.length > 0 ? (
@@ -2836,8 +2947,113 @@ function Preview({
             </>
           )}
         </div>
+  );
+
+  if (isStandalone) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          background: settings.darkMode ? "#090d16" : "#f1f5f9",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "flex-start",
+          margin: 0,
+          padding: 0,
+        }}
+      >
+        {phoneFrame}
+      </div>
+    );
+  }
+
+  return (
+    <div className="preview-overlay" onClick={onClose}>
+      <div className="preview-shell" onClick={e => e.stopPropagation()}>
+        <div className="preview-top">
+          <div>
+            <span className="section-kicker">LIVE STUDENT APP PREVIEW</span>
+            <h2>{settings.appName} Mobile App</h2>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {settings.maintenanceMode && (
+              <button
+                className="outline-btn small"
+                onClick={() => setBypassMaintenance(b => !b)}
+                title="Toggle between Maintenance Screen and Admin Bypass"
+              >
+                {bypassMaintenance
+                  ? "Show Maintenance Screen"
+                  : "Admin Bypass App"}
+              </button>
+            )}
+            <button
+              className="close-button"
+              onClick={onClose}
+              title="Close preview"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+        {phoneFrame}
       </div>
     </div>
+  );
+}
+
+export function PreviewStandalone() {
+  const [nodes, setNodes] = useState<Node[]>(seed);
+  const [appSettings, setAppSettings] = useState<UserAppSettings>(defaultAppSettings);
+
+  useEffect(() => {
+    let active = true;
+    try {
+      const savedNodes = localStorage.getItem("studybull_zero_nodes_v1");
+      if (savedNodes) {
+        const parsed = JSON.parse(savedNodes);
+        if (Array.isArray(parsed)) setNodes(sanitizeMoodMojiNodes(parsed));
+      }
+      const savedSettings = localStorage.getItem("studybull_zero_settings_v1");
+      if (savedSettings) {
+        const parsedSettings = JSON.parse(savedSettings);
+        setAppSettings(prev => ({ ...prev, ...parsedSettings }));
+      }
+    } catch {}
+
+    void fetchStudyBullStateFromSupabase<Node, UserAppSettings>().then(remote => {
+      if (!active || !remote) return;
+      if (Array.isArray(remote.nodes) && remote.nodes.length > 0) {
+        setNodes(sanitizeMoodMojiNodes(remote.nodes));
+      }
+      if (remote.settings && Object.keys(remote.settings).length > 0) {
+        setAppSettings(prev => ({ ...prev, ...remote.settings }));
+      }
+    });
+
+    const unsubscribe = subscribeToStudyBullState<Node, UserAppSettings>(payload => {
+      if (!active) return;
+      if (Array.isArray(payload.nodes) && payload.nodes.length > 0) {
+        setNodes(sanitizeMoodMojiNodes(payload.nodes));
+      }
+      if (payload.settings && Object.keys(payload.settings).length > 0) {
+        setAppSettings(prev => ({ ...prev, ...payload.settings }));
+      }
+    });
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  return (
+    <Preview
+      nodes={nodes}
+      settings={appSettings}
+      onClose={() => {}}
+      isStandalone={true}
+    />
   );
 }
 
@@ -3087,7 +3303,7 @@ export default function Home() {
       if (savedNodes) {
         const parsed = JSON.parse(savedNodes) as Node[];
         if (Array.isArray(parsed)) {
-          setNodes(parsed);
+          setNodes(sanitizeMoodMojiNodes(parsed));
         }
       }
       const savedSettings = localStorage.getItem("studybull_zero_settings_v1");
@@ -3110,11 +3326,12 @@ export default function Home() {
       remote => {
         if (!active || !remote) return;
         if (Array.isArray(remote.nodes) && remote.nodes.length > 0) {
-          setNodes(remote.nodes);
+          const sanitizedRemoteNodes = sanitizeMoodMojiNodes(remote.nodes);
+          setNodes(sanitizedRemoteNodes);
           try {
             localStorage.setItem(
               "studybull_zero_nodes_v1",
-              JSON.stringify(remote.nodes)
+              JSON.stringify(sanitizedRemoteNodes)
             );
           } catch {
             // ignore
@@ -3142,7 +3359,7 @@ export default function Home() {
       payload => {
         if (!active) return;
         if (Array.isArray(payload.nodes) && payload.nodes.length > 0) {
-          setNodes(payload.nodes);
+          setNodes(sanitizeMoodMojiNodes(payload.nodes));
         }
         if (payload.settings && Object.keys(payload.settings).length > 0) {
           setAppSettings(prev => ({
@@ -6625,6 +6842,17 @@ Requirements:
                       outline: "none",
                     }}
                   />
+                  <div style={{ marginTop: 16 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#475569", marginBottom: 8 }}>
+                      Live Interactive Preview
+                    </div>
+                    <SandboxedHtmlView
+                      htmlContent={currentPageNode.htmlContent}
+                      title={currentPageNode.title}
+                      minHeight={400}
+                      style={{ border: "1px solid var(--line)" }}
+                    />
+                  </div>
                 </div>
               )}
 
@@ -7564,21 +7792,11 @@ Requirements:
                 <div style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>
                   Live Interactive Mobile Preview
                 </div>
-                <div
-                  style={{
-                    flex: 1,
-                    minHeight: 260,
-                    background: "#ffffff",
-                    color: "#0f172a",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: 10,
-                    padding: 14,
-                    overflowY: "auto",
-                    wordBreak: "break-word",
-                  }}
-                  dangerouslySetInnerHTML={{
-                    __html: editableHtml || `<div>${htmlCodeViewerNode.title}</div>`,
-                  }}
+                <SandboxedHtmlView
+                  htmlContent={editableHtml}
+                  title={htmlCodeViewerNode.title}
+                  minHeight={280}
+                  style={{ flex: 1, minHeight: 280, border: "1px solid #cbd5e1" }}
                 />
               </div>
             </div>
