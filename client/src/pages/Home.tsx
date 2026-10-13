@@ -2886,6 +2886,7 @@ export default function Home() {
 
   // Database Connection Manager State
   const [showDbModal, setShowDbModal] = useState(false);
+  const [dbStatusMsg, setDbStatusMsg] = useState<string | null>(null);
   const [dbConfigState, setDbConfigState] = useState(() => getStoredSupabaseConfig());
   const [dbUrlInput, setDbUrlInput] = useState(() => getStoredSupabaseConfig().url);
   const [dbKeyInput, setDbKeyInput] = useState(() => getStoredSupabaseConfig().key);
