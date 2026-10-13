@@ -106,9 +106,12 @@ export default function SandboxedHtmlView({
     window.prompt = function() { return ""; };
   }
 
-  // 3. Graceful error logging (prevents uncaught exceptions from halting DOM execution)
+  // 3. Graceful error & API Promise handling (prevents uncaught API fetch errors from breaking the page)
   window.addEventListener('error', function(e) {
     console.warn('[StudyBull Sandbox Notice]:', e.message);
+  });
+  window.addEventListener('unhandledrejection', function(e) {
+    console.warn('[StudyBull API / Promise Notice]:', e.reason);
   });
 })();
 </script>
@@ -158,7 +161,7 @@ export default function SandboxedHtmlView({
 </script>
 `;
 
-    const metaViewport = `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">`;
+    const metaViewport = `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">\n<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">`;
     const baseStyle = `
 <style>
   html, body {
@@ -304,7 +307,7 @@ export default function SandboxedHtmlView({
         ref={iframeRef}
         title={title || "Custom Web View"}
         srcDoc={safeSrcDoc}
-        sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
+        sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-presentation"
         allow="fullscreen; clipboard-read; clipboard-write; autoplay; encrypted-media; picture-in-picture"
         loading="lazy"
         style={{
