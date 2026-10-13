@@ -335,5 +335,64 @@ export const SUPABASE_SQL_SCHEMA = `create table if not exists public.studybull_
   updated_at timestamptz not null default now()
 );
 
-alter table public.studybull_app_state disable row level security;
-grant all on table public.studybull_app_state to anon, authenticated, service_role;`;
+-- Enable RLS and create explicit policies to satisfy Supabase security advisor
+alter table public.studybull_app_state enable row level security;
+
+drop policy if exists "Allow public read access" on public.studybull_app_state;
+create policy "Allow public read access" on public.studybull_app_state for select using (true);
+
+drop policy if exists "Allow public insert access" on public.studybull_app_state;
+create policy "Allow public insert access" on public.studybull_app_state for insert with check (true);
+
+drop policy if exists "Allow public update access" on public.studybull_app_state;
+create policy "Allow public update access" on public.studybull_app_state for update using (true);
+
+drop policy if exists "Allow public upsert access" on public.studybull_app_state;
+create policy "Allow public upsert access" on public.studybull_app_state for all using (true) with check (true);
+
+grant all on table public.studybull_app_state to anon, authenticated, service_role;
+
+-- Clean up unused experimental tables if any
+drop table if exists public.custom_features;`;
+
+export async function diagnoseSupabaseStatus(): Promise<void> {
+  console.group("[Supabase Diagnostic Utility]");
+  const config = getStoredSupabaseConfig();
+  console.log("Configuration Source:", config.source);
+  console.log("Supabase URL:", config.url || "Not Set");
+  console.log("Is Configured:", config.isConfigured);
+
+  if (!supabase) {
+    console.error("❌ Supabase client is not initialized. Please configure URL and Anon Key.");
+    console.groupEnd();
+    return;
+  }
+
+  try {
+    console.log(`Checking table "${SUPABASE_TABLE}"...`);
+    const { data, error } = await supabase
+      .from(SUPABASE_TABLE)
+      .select("*")
+      .eq("id", SUPABASE_MAIN_ROW_ID)
+      .maybeSingle();
+
+    if (error) {
+      console.error("❌ Supabase Query Error:", error.message, "(Code:", error.code, ")");
+      if (error.code === "42P01") {
+        console.warn(`⚠️ Table "${SUPABASE_TABLE}" does not exist. Please run the SQL reset script in your Supabase SQL Editor.`);
+      }
+    } else {
+      console.log("✅ Successfully connected to Supabase table:", SUPABASE_TABLE);
+      console.log("📊 Record status:", data ? "Row 'main' exists" : "Table is empty (no 'main' row yet)");
+    }
+  } catch (err: any) {
+    console.error("❌ Network or Exception during Supabase diagnostic:", err?.message || err);
+  }
+  console.groupEnd();
+}
+
+// Auto-run diagnostic in development/console if window is available
+if (typeof window !== "undefined") {
+  (window as any).diagnoseSupabase = diagnoseSupabaseStatus;
+}
+

@@ -3108,14 +3108,16 @@ export default function Home() {
     void fetchStudyBullStateFromSupabase<Node, UserAppSettings>().then(
       remote => {
         if (!active || !remote) return;
-        setNodes(remote.nodes);
-        try {
-          localStorage.setItem(
-            "studybull_zero_nodes_v1",
-            JSON.stringify(remote.nodes)
-          );
-        } catch {
-          // ignore
+        if (Array.isArray(remote.nodes) && remote.nodes.length > 0) {
+          setNodes(remote.nodes);
+          try {
+            localStorage.setItem(
+              "studybull_zero_nodes_v1",
+              JSON.stringify(remote.nodes)
+            );
+          } catch {
+            // ignore
+          }
         }
         if (remote.settings && Object.keys(remote.settings).length > 0) {
           setAppSettings(prev => {
@@ -3138,7 +3140,9 @@ export default function Home() {
     const unsubscribe = subscribeToStudyBullState<Node, UserAppSettings>(
       payload => {
         if (!active) return;
-        setNodes(payload.nodes);
+        if (Array.isArray(payload.nodes) && payload.nodes.length > 0) {
+          setNodes(payload.nodes);
+        }
         if (payload.settings && Object.keys(payload.settings).length > 0) {
           setAppSettings(prev => ({
             ...prev,
@@ -3676,7 +3680,6 @@ export default function Home() {
     const next = addChild(nodes, currentPageNode?.id || null, child);
     saveStructure(next, `${kindLabel[kind]} created!`);
     setShowCreate(false);
-    openDedicatedPage(child.id);
   };
 
   const requestCreateItemInCurrentPage = (kind: Kind) => {
@@ -7539,7 +7542,19 @@ Requirements:
                   value={editableHtml}
                   onChange={e => setEditableHtml(e.target.value)}
                   placeholder="Write or edit HTML code..."
-                  style={{ fontFamily: "monospace", fontSize: 12, flex: 1, minHeight: 240, resize: "vertical", background: "#f8fafc" }}
+                  style={{
+                    fontFamily: "ui-monospace, monospace",
+                    fontSize: 12.5,
+                    color: "#0f172a",
+                    background: "#ffffff",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 10,
+                    padding: 12,
+                    flex: 1,
+                    minHeight: 260,
+                    resize: "vertical",
+                    outline: "none",
+                  }}
                 />
               </div>
 
@@ -7551,8 +7566,9 @@ Requirements:
                 <div
                   style={{
                     flex: 1,
-                    minHeight: 240,
-                    background: "#fff",
+                    minHeight: 260,
+                    background: "#ffffff",
+                    color: "#0f172a",
                     border: "1px solid #cbd5e1",
                     borderRadius: 10,
                     padding: 14,
