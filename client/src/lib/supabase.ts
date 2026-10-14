@@ -57,6 +57,10 @@ function normalizeSupabaseKey(raw: string | undefined): string {
   return cleaned;
 }
 
+// Built-in permanent fallback credentials
+export const BUILTIN_SUPABASE_URL = "https://epsplspwdjjjjezxscer.supabase.co";
+export const BUILTIN_SUPABASE_KEY = "sb_publishable_X8IsGDLwK9fUliHih60dlg_vqyOiePl";
+
 export function getStoredSupabaseConfig() {
   let localUrl = "";
   let localKey = "";
@@ -70,14 +74,23 @@ export function getStoredSupabaseConfig() {
   const envUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
   const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-  const url = normalizeSupabaseUrl(localUrl) || normalizeSupabaseUrl(envUrl);
-  const key = normalizeSupabaseKey(localKey) || normalizeSupabaseKey(envKey);
+  const url =
+    normalizeSupabaseUrl(localUrl) ||
+    normalizeSupabaseUrl(envUrl) ||
+    normalizeSupabaseUrl(BUILTIN_SUPABASE_URL);
 
-  const source: "local" | "env" | "none" =
+  const key =
+    normalizeSupabaseKey(localKey) ||
+    normalizeSupabaseKey(envKey) ||
+    normalizeSupabaseKey(BUILTIN_SUPABASE_KEY);
+
+  const source: "local" | "env" | "builtin" | "none" =
     localUrl && localKey && url && key
       ? "local"
       : envUrl && envKey && url && key
       ? "env"
+      : BUILTIN_SUPABASE_URL && BUILTIN_SUPABASE_KEY && url && key
+      ? "builtin"
       : "none";
 
   return { url, key, source, isConfigured: Boolean(url && key) };
