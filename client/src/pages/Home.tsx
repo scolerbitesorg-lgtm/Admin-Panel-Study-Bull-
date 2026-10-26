@@ -72,6 +72,8 @@ import {
   CalcMode,
 } from "@/components/SpeedCalculationView";
 import SandboxedHtmlView from "@/components/SandboxedHtmlView";
+import { lazy, Suspense } from "react";
+const ViewsStatsView = lazy(() => import("@/components/ViewsStatsView"));
 
 type Kind =
   | "button"
@@ -3069,7 +3071,7 @@ export default function Home() {
 
   // Navigation: "manager" vs "settings" vs "create_passcode" vs "active_passcodes" (opened from Menu Button)
   const [activeView, setActiveView] = useState<
-    "manager" | "settings" | "create_passcode" | "active_passcodes"
+    "manager" | "settings" | "create_passcode" | "active_passcodes" | "views"
   >("manager");
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -4561,6 +4563,19 @@ export default function Home() {
 
             <button
               className={`menu-nav-btn ${
+                activeView === "views" ? "active" : ""
+              }`}
+              data-sb-nav-views="1"
+              onClick={() => {
+                setActiveView("views");
+                setMenuOpen(false);
+              }}
+            >
+              <span style={{ fontSize: 17, width: 18, textAlign: "center" }}>📊</span> Views (रोज़ कितने लोग आए)
+            </button>
+
+            <button
+              className={`menu-nav-btn ${
                 activeView === "create_passcode" ? "active" : ""
               }`}
               onClick={() => {
@@ -4663,7 +4678,9 @@ export default function Home() {
               style={{ cursor: "pointer", minWidth: 0 }}
             >
               <h1>
-                {activeView === "settings"
+                {activeView === "views"
+                  ? `${appSettings.appName} — 📊 Views`
+                  : activeView === "settings"
                   ? `${appSettings.appName} — Settings & Admin Control`
                   : activeView === "create_passcode"
                   ? `${appSettings.appName} — Create New Passcode`
@@ -4672,7 +4689,9 @@ export default function Home() {
                   : `${appSettings.appName} — Home Page Manager`}
               </h1>
               <p>
-                {activeView === "settings"
+                {activeView === "views"
+                  ? "User site visitors per day • last 7 / 30 days • top buttons"
+                  : activeView === "settings"
                   ? "Customize User App Name, Logo, Theme Colors & Maintenance Mode"
                   : activeView === "create_passcode"
                   ? "Generate new Admin or Developer credentials securely"
@@ -5093,6 +5112,10 @@ export default function Home() {
                 </div>
               </div>
             </div>
+          ) : activeView === "views" ? (
+            <Suspense fallback={<div className="panel" style={{ padding: 24, textAlign: "center", color: "#64748b" }}>लोड हो रहा है…</div>}>
+              <ViewsStatsView />
+            </Suspense>
           ) : activeView === "settings" ? (
             /* =================================================================
                SETTINGS PAGE: USER APP BRANDING, THEME COLORS & MAINTENANCE MODE
