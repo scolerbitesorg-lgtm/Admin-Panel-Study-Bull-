@@ -83,7 +83,9 @@ const EXAMPLES = [
 
 // Hard words that mean edit/delete → refused in code before any AI call (only the instruction part is checked)
 const EDIT_RE =
-  /\b(delete|del|remove|hata|hatao|hatado|hta|htao|htado|mita|mitao|mitado|edit|rename|replace|reorder|passcode|password|theme|maintenance|badlo|badal\s*do|change\s*(karo|kro|kar\s*do|kardo)|sudharo|sudhar\s*do|move\s*(karo|kro|kar\s*do)|shift\s*(karo|kro)|hide|chupao)\b|हटा|मिटा|डिलीट|बदलो|बदल\s*दो|सुधारो|पासकोड|थीम/i;
+  /\b(delete|del|remove|hata|hatao|hatado|hta|htao|htado|mita|mitao|mitado|edit|rename|replace|reorder|passcode|password|theme|maintenance|badlo|badal\s*do|change\s*(karo|kro|kar\s*do|kardo)|sudharo|sudhar\s*do|move\s*(karo|kro|kar\s*do)|shift\s*(karo|kro)|hide|chupao)\b|हटा\s*(दो|दें|दीजिए|देना)|हटाओ|हटाएँ|हटाएं|मिटा\s*(दो|दें)|मिटाओ|डिलीट|बदल\s*(दो|दें|दीजिए)|बदलो|सुधार\s*(दो|दें)|सुधारो|पासकोड|थीम/i;
+// quoted names ('…', "…", “…”) are titles, not commands — they are not checked
+const unquote = (s: string) => s.replace(/(['"“”‘’])(?:(?!\1).){1,120}\1/g, " ");
 
 function splitMessage(text: string): { instruction: string; paste: string } {
   const t = text.replace(/\r\n?/g, "\n").trim();
@@ -394,7 +396,7 @@ export default function AiAssistantView({ nodes, onCommit }: Props) {
     push({ role: "user", text });
     const { instruction, paste } = splitMessage(text);
 
-    if (instruction && EDIT_RE.test(instruction)) {
+    if (instruction && EDIT_RE.test(unquote(instruction))) {
       push({
         role: "ai",
         text: "⛔ माफ़ कीजिए — मैं पुराना data बदल, हटा, छिपा या हिला नहीं सकता, और passcode/theme/maintenance/settings भी नहीं छू सकता। मैं सिर्फ़ नया data जोड़ सकता हूँ (जैसे 73 → 80 प्रश्न)। सिर्फ़ जोड़ने वाली बात दोबारा लिखें।",
