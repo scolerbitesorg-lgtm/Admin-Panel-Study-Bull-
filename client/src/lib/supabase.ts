@@ -222,6 +222,8 @@ let lastSavedTileJson = new Map<string, string>(); // tileId -> heavy JSON confi
 let lastSavedTileBytes = new Map<string, number>();
 let currentTileVersions: Record<string, string> = {};
 let lastLocalWriteAt = ""; // updated_at of the newest "main" copy this tab wrote
+let lastMainSettingsJson: string | null = null; // main.settings as last read/written by this tab
+let lastSplitAt = ""; // newest split save time known to this tab (index settings._split.mainAt)
 
 const tileRowId = (id: unknown) => `tile:${String(id)}`;
 const newVersion = () => `${new Date().toISOString()}~${Math.random().toString(36).slice(2, 7)}`;
@@ -361,6 +363,8 @@ export async function fetchStudyBullStateFromSupabase<TNode = unknown, TSettings
     const idx: any = idxRes.data;
     const split = idx?.settings?._split;
     const mainSettings = main?.settings && typeof main.settings === "object" ? main.settings : null;
+    if (mainSettings) lastMainSettingsJson = JSON.stringify(mainSettings);
+    if (split?.mainAt && isNewer(split.mainAt, lastSplitAt || null)) lastSplitAt = split.mainAt;
 
     let useSplit = Boolean(!idxRes.error && !tilesRes.error && idx && Array.isArray(idx.nodes) && split && split.tiles);
     // An older admin tab wrote only the old row after the last split save → the old row is the truth
@@ -522,13 +526,20 @@ async function saveSplitOnce(p: SavePayload): Promise<{ ok: boolean; rows?: numb
     const { error: idxErr } = await client.from(SUPABASE_TABLE).upsert(index, { onConflict: "id" });
     if (idxErr) return { ok: false, error: `${idxErr.code || ""} ${idxErr.message || "index save error"}`.trim() };
 
+    lastSplitAt = at;
     lastSavedTileJson = nextJson;
     lastSavedTileBytes = nextBytes;
     currentTileVersions = nextVersions;
     splitReady = true;
 
-    // 3) compatibility copy in the old single row (one week) — background, never blocks the editor
-    if (!p.skipMain) queueMainWrite({ nodes, settings: p.settings, at });
+    // 3) The old single row "main" no longer gets the content (Oct 26 2026: the multi-MB copy timed out on big
+    //    saves → false red "सेव नहीं हुआ" box, and it wasted Supabase egress). Only when the settings changed
+    //    (passcodes live only in main.settings) is main.settings updated — small, and without touching
+    //    main.nodes / main.updated_at, so readers never treat "main" as newer than the split rows.
+    if (!p.skipMain) {
+      const sj = JSON.stringify(p.settings ?? null);
+      if (sj !== lastMainSettingsJson) queueMainWrite({ nodes: [], settings: p.settings, at });
+    }
     return { ok: true, rows: changed.length + 1 };
   } catch (err: any) {
     return { ok: false, error: err?.message || "network error" };
@@ -547,11 +558,13 @@ function queueMainWrite(p: { nodes: unknown[]; settings: unknown; at: string }) 
 async function writeMain(p: { nodes: unknown[]; settings: unknown; at: string }): Promise<string | null> {
   if (!supabase) return "database not configured";
   try {
-    lastLocalWriteAt = p.at;
+    // settings only (see saveSplitOnce step 3); main.nodes and main.updated_at stay as they are
     const { error } = await supabase
       .from(SUPABASE_TABLE)
-      .upsert({ id: SUPABASE_MAIN_ROW_ID, nodes: p.nodes, settings: p.settings, updated_at: p.at }, { onConflict: "id" });
-    return error ? `${error.code || ""} ${error.message || "main save error"}`.trim() : null;
+      .update({ settings: p.settings })
+      .eq("id", SUPABASE_MAIN_ROW_ID);
+    if (!error) lastMainSettingsJson = JSON.stringify(p.settings ?? null);
+    return error ? `${error.code || ""} ${error.message || "main settings save error"}`.trim() : null;
   } catch (err: any) {
     return err?.message || "network error";
   }
@@ -571,7 +584,7 @@ async function pumpMain() {
       if (err && !mainPending) {
         console.warn("[Supabase] Old-row (main) copy failed:", err);
         retryHandler = () => queueMainWrite(p);
-        showSaveStatus({ ok: false, state: "error", error: `पुरानी कॉपी (main) — ${err}`, at: new Date().toISOString() });
+        showSaveStatus({ ok: false, state: "error", error: `सेटिंग्स (main) — ${err}`, at: new Date().toISOString() });
       }
     }
   } finally {
@@ -646,6 +659,9 @@ export function subscribeToStudyBullState<TNode = unknown, TSettings = unknown>(
         if (!nextRow) return;
         if (saveRunning || mainRunning || saveDebounceTimer) return;
         if (nextRow.updated_at && lastLocalWriteAt && !isNewer(nextRow.updated_at, lastLocalWriteAt)) return;
+        // "main" no longer carries current content (only settings get updated, without a new updated_at):
+        // an echo that is not newer than the split rows would put OLD content back into the editor.
+        if (lastSplitAt && !isNewer(nextRow.updated_at || null, lastSplitAt)) return;
         if (!Array.isArray(nextRow.nodes)) return;
         onUpdate({
           nodes: nextRow.nodes,
