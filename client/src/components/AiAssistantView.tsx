@@ -560,7 +560,15 @@ export default function AiAssistantView({ nodes, onCommit }: Props) {
             const a = await callAi("notes", { topic, where: whereText, part: "भाग 1: परिचय और मुख्य बातें (# headings, ▸ points)" });
             setProgress("📖 नोट्स लिख रहा हूँ… (2/2)");
             const b = await callAi("notes", { topic, where: whereText, part: "भाग 2: ⭐ परीक्षा तथ्य (8-10 points) और 📌 याद रखो (3-5 points) — भाग 1 दोहराएँ नहीं" });
-            text = [String(a?.content || "").trim(), String(b?.content || "").trim()].filter(Boolean).join("\n\n");
+            text = [String(a?.content || "").trim(), String(b?.content || "").trim()]
+              .filter(Boolean)
+              .join("\n\n")
+              .replace(/\*\*/g, "")
+              .replace(/[ \t]+\n/g, "\n")
+              .replace(/\n{3,}/g, "\n\n");
+            if (!/^\s*(?:TITLE|शीर्षक)/i.test(title) && !existing && !tl.title && a?.title) {
+              /* keep the planner's title; the AI's own title is only a fallback */
+            }
           }
           const bad = ["document.", "var ", "onclick="].find(x => text.includes(x));
           if (!text.trim() || bad) {
@@ -604,6 +612,11 @@ export default function AiAssistantView({ nodes, onCommit }: Props) {
         if (!valid.length) {
           errors.push(`"${title}": कोई सही प्रश्न नहीं बना`);
           continue;
+        }
+        if (existing && !pyq && !fromPaste) {
+          const eq = existing.questions || [];
+          const tagged = eq.filter(q => /\[\s*PYQ\s*:/i.test(q.question || "")).length;
+          if (eq.length && tagged >= eq.length / 2) warnings.push(`"${existing.title}" में असली PYQ हैं — ये नए प्रश्न AI के बनाए "PYQ स्टाइल" हैं, इन पर PYQ टैग नहीं लगेगा।`);
         }
         const mockCfg =
           type === "mock"

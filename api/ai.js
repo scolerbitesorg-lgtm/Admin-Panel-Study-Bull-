@@ -70,6 +70,8 @@ const RULES_COMMON = `You work for the StudyBull exam-prep site (SSC GD, Agnivee
 Hindi must be in Devanagari script (never romanized Hindi). Keep facts exam-correct and standard (NCERT/Lucent level). Never invent current affairs, dates or real past-paper (PYQ) claims.
 Reply with ONE JSON object only. No markdown, no code fences, no text outside the JSON.`;
 
+const RULES_TEXT = RULES_COMMON.replace("Reply with ONE JSON object only. No markdown, no code fences, no text outside the JSON.", "Reply in plain text only (no JSON, no code fences).");
+
 const PLAN_SYSTEM = `${RULES_COMMON}
 You are the planner of the admin "AI Assistant". It can ONLY ADD NEW content. It can NEVER edit, change, rename, move, reorder, hide or delete anything that already exists, and never touch passcodes, theme, colours, maintenance mode, settings, or the home screen tiles (no new home tiles).
 Aarav writes in Hinglish/Hindi/English. Decide what NEW items to add and exactly where, using the CATALOG of existing folders (each line: ref, title; leaves show kind letter Q=MCQ quiz, M=mock test, N=notes page, H=web page, T=typing, with question count).
@@ -86,7 +88,7 @@ Placement: "parent" = the ref (like F12) of the folder the item goes into. "new_
 "lang": "hi" (Hindi-first Devanagari, default) or "en" (only for English-language subjects/passages).
 If Aarav asks to delete, edit, change, correct, rename, move, reorder, hide, or to change passcode/theme/maintenance/settings/home tiles → action "refuse" and explain in short Hinglish that you can only add new things. If he asks for a Job Alert entry → "refuse" with: Job Alert admin me nahi hai, use Tab update karta hai. If it's just a question/greeting → action "chat". If something essential is unclear (e.g. no subject) → action "ask" with one short question.
 Output schema:
-{"action":"add"|"refuse"|"chat"|"ask","reply":"<short Hinglish, 1-2 lines>","tasks":[{"type":"mcq|notes|mock|typing|ca_day|folder","parent":"F12","existing":"","new_folders":[],"title":"","icon":"","source":"generate|paste","count":0,"topic":"","lang":"hi","pyq":"","date":"","duration":0,"pos":0,"neg":0,"sections":[]}]}
+{"action":"add"|"refuse"|"chat"|"ask","reply":"<short Hinglish, 1-2 lines; for add: say what you PROPOSE to add and where (nothing is saved until Aarav taps ✅ Add — never say it is already added/done)>","tasks":[{"type":"mcq|notes|mock|typing|ca_day|folder","parent":"F12","existing":"","new_folders":[],"title":"","icon":"","source":"generate|paste","count":0,"topic":"","lang":"hi","pyq":"","date":"","duration":0,"pos":0,"neg":0,"sections":[]}]}
 Do not add a separate "folder" task for a folder that another task already creates through "new_folders". Put any emoji in "icon", not in "title". Keep at most 6 tasks. Counts: max 50 MCQs per task unless pasted.`;
 
 const MCQ_SYSTEM = `${RULES_COMMON}
@@ -108,15 +110,15 @@ You are a strict fact-checker for exam MCQs (Indian competitive exams, NCERT/Luc
 For EACH MCQ check: the marked answer (index "a", 0-3) is definitely correct; exactly one option is correct; the question and explanation contain no false fact; every quoted word/phrase/name really exists in the source it claims (e.g. exact words of the Preamble, real battle/book/person names); it is not ambiguous or trivial nonsense. If you are not fully sure, mark it not ok — dropping a good question is fine, keeping a wrong one is not.
 Output: {"results":[{"i":0,"ok":true,"why":""}]} with one entry per MCQ, in order; "why" = at most 8 English words, only when not ok.`;
 
-const NOTES_SYSTEM = `${RULES_COMMON}
+const NOTES_SYSTEM = `${RULES_TEXT}
 Write clean exam study notes for StudyBull in Hindi (Devanagari), in your own words.
 Format (plain text, no markdown tables): headings as lines starting with "# ", points as lines starting with "▸ ", a section "⭐ परीक्षा तथ्य" with key exam facts, and a section "📌 याद रखो" with 3-5 memory points. English terms may follow in brackets.
 Write ONLY the part asked for (PART), compact, about 1200-1800 characters.
-Output: {"title":"<short Hindi title>","content":"<notes text with \\n line breaks>"}`;
+Output PLAIN TEXT (not JSON): the first line is "TITLE: <short Hindi title>", then the notes. Use correct standard Hindi terms (e.g. परावर्तन = Reflection, अपवर्तन = Refraction).`;
 
-const TYPING_SYSTEM = `${RULES_COMMON}
+const TYPING_SYSTEM = `${RULES_TEXT}
 Write ONE original typing-practice passage for SSC/CPCT/police typing tests: one continuous paragraph (no line breaks, no bullet points), plain punctuation, about the requested number of words, on the requested topic, useful general-awareness content. If lang is "hi" write in Hindi Devanagari (Unicode/Mangal style); if "en" write in English with proper capitals and punctuation.
-Output: {"title":"<short title>","text":"<the passage>"}`;
+Output PLAIN TEXT (not JSON): the first line is "TITLE: <short title>", then the passage as one paragraph.`;
 
 function userMsg(obj) {
   return JSON.stringify(obj);
@@ -195,6 +197,23 @@ function buildMessages(mode, input) {
 }
 
 /* ------------------------------ AI call ------------------------------ */
+function parsePlain(text) {
+  let t = String(text || "").replace(/^```\w*\s*/, "").replace(/```\s*$/, "").trim();
+  if (!t) return null;
+  if (t.startsWith("{")) {
+    const j = extractJson(t);
+    const inner = j && (j.content || j.text);
+    if (typeof inner === "string") t = (j.title ? `TITLE: ${j.title}\n` : "") + inner;
+  }
+  let title = "";
+  const m = t.match(/^\s*(?:TITLE|शीर्षक)\s*[:：-]\s*(.+)\n/i);
+  if (m) {
+    title = m[1].trim().replace(/^["'*#\s]+|["'*\s]+$/g, "");
+    t = t.slice(m[0].length).trim();
+  }
+  return t.length > 40 ? { title, content: t, text: t } : null;
+}
+
 function extractJson(text) {
   let t = String(text || "").trim();
   t = t.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
@@ -206,7 +225,7 @@ function extractJson(text) {
     return JSON.parse(body);
   } catch {
     try {
-      return JSON.parse(body.replace(/,\s*([}\]])/g, "$1"));
+      return JSON.parse(body.replace(/,\s*([}\]])/g, "$1").replace(/\\(?!["\\/bfnrtu])/g, ""));
     } catch {
       return null;
     }
@@ -293,7 +312,9 @@ export default async function handler(req, res) {
   // thinking ran out of room (1024-token answers on the Karya route) → one quick retry with light thinking
   if (r.ok && effort !== "low") {
     const c0 = r.j && r.j.choices && r.j.choices[0];
-    if (!extractJson(c0 && c0.message && c0.message.content)) r = await callAI(messages, want, "low");
+    const t0 = c0 && c0.message && c0.message.content;
+    const parsed = mode === "notes" || mode === "typing" ? parsePlain(t0) : extractJson(t0);
+    if (!parsed || (c0 && c0.finish_reason === "length" && mode === "notes")) r = await callAI(messages, want, "low");
   }
   if (!r.ok) {
     const st = r.status || 502;
@@ -302,10 +323,10 @@ export default async function handler(req, res) {
   }
   const choice = r.j && r.j.choices && r.j.choices[0];
   const content = choice && choice.message && choice.message.content;
-  const data = extractJson(content);
+  const data = mode === "notes" || mode === "typing" ? parsePlain(content) || extractJson(content) : extractJson(content);
   if (!data) return send(res, 200, { ok: false, code: "bad_json", finish: choice && choice.finish_reason, via: r.via });
   return send(res, 200, { ok: true, data, finish: choice.finish_reason, model: r.j.model, via: r.via });
 }
 
 // exported for local tests only
-export { buildMessages, extractJson, callAI };
+export { buildMessages, extractJson, parsePlain, callAI };
