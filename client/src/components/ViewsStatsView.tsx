@@ -231,7 +231,7 @@ export default function ViewsStatsView() {
 
           <div style={{ fontSize: 11.5, color: "#64748b", lineHeight: 1.6, padding: "0 4px" }}>
             👥 विज़िटर = उस दिन अलग-अलग डिवाइस (एक फ़ोन दिन में 10 बार खोले तो 1 विज़िटर, 10 बार)। 7/30 दिन वाले विज़िटर रोज़ के जोड़ हैं।
-            Bots नहीं गिने जाते। {loadedAt && <>अपडेट: {loadedAt.toLocaleTimeString("hi-IN", { hour: "2-digit", minute: "2-digit" })} (हर मिनट खुद रिफ्रेश)</>}
+            Bots नहीं गिने जाते। {loadedAt && <>अपडेट: {loadedAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })} (हर मिनट खुद रिफ्रेश)</>}
             <br />इस काउंटर से पहले का डेटा: Vercel → studybull → Analytics.
           </div>
         </div>
