@@ -74,6 +74,7 @@ import {
 import SandboxedHtmlView from "@/components/SandboxedHtmlView";
 import { lazy, Suspense } from "react";
 const ViewsStatsView = lazy(() => import("@/components/ViewsStatsView"));
+const AiAssistantView = lazy(() => import("@/components/AiAssistantView"));
 
 type Kind =
   | "button"
@@ -3071,7 +3072,7 @@ export default function Home() {
 
   // Navigation: "manager" vs "settings" vs "create_passcode" vs "active_passcodes" (opened from Menu Button)
   const [activeView, setActiveView] = useState<
-    "manager" | "settings" | "create_passcode" | "active_passcodes" | "views"
+    "manager" | "settings" | "create_passcode" | "active_passcodes" | "views" | "ai"
   >("manager");
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -4576,6 +4577,19 @@ export default function Home() {
 
             <button
               className={`menu-nav-btn ${
+                activeView === "ai" ? "active" : ""
+              }`}
+              data-sb-nav-ai="1"
+              onClick={() => {
+                setActiveView("ai");
+                setMenuOpen(false);
+              }}
+            >
+              <span style={{ fontSize: 17, width: 18, textAlign: "center" }}>🤖</span> AI Assistant (सिर्फ़ नया data जोड़े)
+            </button>
+
+            <button
+              className={`menu-nav-btn ${
                 activeView === "create_passcode" ? "active" : ""
               }`}
               onClick={() => {
@@ -4678,7 +4692,9 @@ export default function Home() {
               style={{ cursor: "pointer", minWidth: 0 }}
             >
               <h1>
-                {activeView === "views"
+                {activeView === "ai"
+                  ? `${appSettings.appName} — 🤖 AI Assistant`
+                  : activeView === "views"
                   ? `${appSettings.appName} — 📊 Views`
                   : activeView === "settings"
                   ? `${appSettings.appName} — Settings & Admin Control`
@@ -4689,7 +4705,9 @@ export default function Home() {
                   : `${appSettings.appName} — Home Page Manager`}
               </h1>
               <p>
-                {activeView === "views"
+                {activeView === "ai"
+                  ? "Chat या paste से सिर्फ़ नया data जोड़ें • preview → ✅ Add • पुराना data कभी नहीं बदलता"
+                  : activeView === "views"
                   ? "User site visitors per day • last 7 / 30 days • top buttons"
                   : activeView === "settings"
                   ? "Customize User App Name, Logo, Theme Colors & Maintenance Mode"
@@ -4742,6 +4760,15 @@ export default function Home() {
             >
               <Database size={15} />
               {dbConfigState.isConfigured ? "🟢 DB Connected" : "🔴 Connect Database"}
+            </button>
+            <button
+              className="outline-btn"
+              data-sb-top-ai="1"
+              onClick={() => setActiveView(v => (v === "ai" ? "manager" : "ai"))}
+              title="🤖 AI Assistant — सिर्फ़ नया data जोड़ता है"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 800, color: "#4338ca", borderColor: "#c7d2fe", background: "#eef2ff" }}
+            >
+              🤖 {activeView === "ai" ? "Home Manager" : "AI Assistant"}
             </button>
             <button
               className="outline-btn"
@@ -5112,6 +5139,10 @@ export default function Home() {
                 </div>
               </div>
             </div>
+          ) : activeView === "ai" ? (
+            <Suspense fallback={<div className="panel" style={{ padding: 24, textAlign: "center", color: "#64748b" }}>लोड हो रहा है…</div>}>
+              <AiAssistantView nodes={nodes as any} onCommit={(next, message) => saveStructure(next as any, message)} />
+            </Suspense>
           ) : activeView === "views" ? (
             <Suspense fallback={<div className="panel" style={{ padding: 24, textAlign: "center", color: "#64748b" }}>लोड हो रहा है…</div>}>
               <ViewsStatsView />

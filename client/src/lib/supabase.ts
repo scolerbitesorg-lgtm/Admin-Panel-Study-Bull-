@@ -327,6 +327,10 @@ const SECRET_SETTINGS_KEYS = ["passcodes"];
 const LEGACY_SLACK_MS = 2000;
 
 let splitReady = false; // index + every tile row loaded and matching
+/** True once index + every tile row were loaded (or saved) — the 🤖 AI Assistant only saves on a fully loaded tree. */
+export function isStudyBullDataReady(): boolean {
+  return splitReady;
+}
 let lastSavedTileJson = new Map<string, string>(); // tileId -> heavy JSON confirmed in the database
 let lastSavedTileBytes = new Map<string, number>();
 let currentTileVersions: Record<string, string> = {};

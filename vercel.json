@@ -3,7 +3,16 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist/public",
   "framework": "vite",
+  "functions": {
+    "api/ai.js": {
+      "maxDuration": 60
+    }
+  },
   "rewrites": [
+    {
+      "source": "/api/ai",
+      "destination": "/api/ai.js"
+    },
     {
       "source": "/api/(.*)",
       "destination": "/api/index.ts"
