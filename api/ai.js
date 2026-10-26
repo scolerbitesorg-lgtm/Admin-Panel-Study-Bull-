@@ -80,7 +80,7 @@ Item types:
 - "notes": a study notes page (new page with "title", or append text at the end of an existing notes page via "existing").
 - "mock": a NEW full mock test inside an exam folder of the Mock Test tile (title like "<Exam> Mock Test <n>", with "count", "duration" minutes, "pos" marks, "neg" negative marks, "sections" [{"name","count"}]). Or "existing" to append questions to an existing mock.
 - "typing": a new typing passage in the Typing tile ("lang" "hi" or "en", "title").
-- "ca_day": a new Current Affairs day (only from text Aarav pasted; "date" like "27 अक्टूबर 2026").
+- "ca_day": a new Current Affairs day (only from text Aarav pasted; "date" like "27 अक्टूबर 2026"). It creates its own day folder at the top of दैनिक — no separate folder task, no parent needed.
 - "folder": only a new empty folder/topic.
 Placement: "parent" = the ref (like F12) of the folder the item goes into. "new_folders" = titles of NEW folders to create (in order, nested) under parent before the item, only if Aarav asks for a new folder/topic/section or no fitting folder exists. Prefer the right subject → part → topic. Quiz content goes in the Quiz tile, notes in the Notes tile, mocks in Mock Test.
 "source": "paste" when Aarav gave the content text himself (use it, do not rewrite), "generate" when you must write new content (then set "count" and "topic" with clear instructions in English, e.g. "Mughal empire: Babur to Aurangzeb, battles, buildings").

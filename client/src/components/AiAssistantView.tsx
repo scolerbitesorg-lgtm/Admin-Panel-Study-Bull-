@@ -529,6 +529,8 @@ export default function AiAssistantView({ nodes, onCommit }: Props) {
         const tl = splitIcon(String(t.title || ""), String(t.icon || ""));
 
         if (type === "folder") {
+          // a Current Affairs day already brings its own folder — don't make a second one
+          if (tasks.some(x => x && x.type === "ca_day") && tile && /करंट|current affairs/i.test(tile.title)) continue;
           const all = [...newFolders];
           if (tl.title) all.push({ title: tl.title, icon: tl.icon || "📁" });
           if (!all.length) continue;
