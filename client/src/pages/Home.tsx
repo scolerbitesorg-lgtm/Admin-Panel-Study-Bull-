@@ -60,6 +60,8 @@ import {
   setSupabaseCredentials,
   clearSupabaseCredentials,
   testSupabaseConnection,
+  signOutAdmin,
+  getAdminEmail,
 } from "@/lib/supabase";
 import {
   TypingPracticeView,
@@ -4457,6 +4459,25 @@ export default function Home() {
           <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid #f1f5f9", fontSize: 11.5, color: "#94a3b8" }}>
             🔒 Protected System • Permanent Dev Passcode: <b>Developer@Aarav</b>
           </div>
+          <button
+            type="button"
+            data-sb-signout="1"
+            onClick={async () => {
+              await signOutAdmin();
+              window.location.reload();
+            }}
+            style={{
+              marginTop: 12,
+              border: "none",
+              background: "transparent",
+              color: "#64748b",
+              fontSize: 13,
+              textDecoration: "underline",
+              cursor: "pointer",
+            }}
+          >
+            🚪 ईमेल लॉगिन से साइन आउट
+          </button>
         </div>
       </div>
     );
@@ -4756,6 +4777,25 @@ export default function Home() {
               }}
             >
               <Lock size={15} /> Lock
+            </button>
+            <button
+              className="outline-btn"
+              data-sb-signout="1"
+              onClick={async () => {
+                await signOutAdmin();
+                window.location.reload();
+              }}
+              title={`Sign out${getAdminEmail() ? " (" + getAdminEmail() + ")" : ""}`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                color: "#334155",
+                borderColor: "#cbd5e1",
+                background: "#f8fafc",
+              }}
+            >
+              🚪 साइन आउट
             </button>
             {activeView === "manager" && (
               <>

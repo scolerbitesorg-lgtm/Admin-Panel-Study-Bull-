@@ -96,14 +96,123 @@ export function getStoredSupabaseConfig() {
   return { url, key, source, isConfigured: Boolean(url && key) };
 }
 
+/* ============================================================================
+ * ADMIN EMAIL LOGIN (Supabase Auth) — Oct 26 2026 security lock.
+ * The admin signs in with email + password (supabase.auth.signInWithPassword); the session is kept in
+ * localStorage and refreshed automatically, so every read/write below carries the admin's own JWT.
+ * Database Row Level Security allows writes (and reading the settings row "main", which holds the
+ * passcodes) only for that signed-in admin. Without a session nothing is loaded or saved.
+ * ========================================================================== */
+const ADMIN_AUTH_STORAGE_KEY = "studybull-admin-auth";
+
+function makeClient(url: string, key: string): SupabaseClient {
+  return createClient(url, key, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: false,
+      storageKey: ADMIN_AUTH_STORAGE_KEY,
+    },
+  });
+}
+
+let adminSignedIn = false;
+let adminEmail: string | null = null;
+const authListeners = new Set<(signedIn: boolean, email: string | null) => void>();
+let authSubscription: { unsubscribe: () => void } | null = null;
+
+function setAdminAuth(session: { user?: { email?: string | null } | null } | null) {
+  const next = Boolean(session);
+  const email = session?.user?.email || null;
+  const changed = next !== adminSignedIn || email !== adminEmail;
+  adminSignedIn = next;
+  adminEmail = email;
+  if (changed) authListeners.forEach(fn => fn(adminSignedIn, adminEmail));
+}
+
+function wireAuth(client: SupabaseClient | null) {
+  try {
+    authSubscription?.unsubscribe();
+  } catch {
+    // ignore
+  }
+  authSubscription = null;
+  if (!client) return;
+  const { data } = client.auth.onAuthStateChange((_event, session) => {
+    setAdminAuth(session);
+  });
+  authSubscription = data.subscription;
+}
+
+export function isAdminSignedIn(): boolean {
+  return adminSignedIn;
+}
+
+export function getAdminEmail(): string | null {
+  return adminEmail;
+}
+
+/** Reads the stored session (if any). Resolves true when the admin is signed in. */
+export async function restoreAdminSession(): Promise<boolean> {
+  if (!supabase) return false;
+  try {
+    const { data } = await supabase.auth.getSession();
+    setAdminAuth(data.session);
+  } catch {
+    setAdminAuth(null);
+  }
+  return adminSignedIn;
+}
+
+export async function signInAdmin(email: string, password: string): Promise<{ ok: boolean; error?: string }> {
+  if (!supabase) return { ok: false, error: "डेटाबेस कनेक्ट नहीं है (database not configured)" };
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    if (error || !data.session) {
+      const msg = String(error?.message || "");
+      if (/invalid login|invalid credentials/i.test(msg)) return { ok: false, error: "❌ ईमेल या पासवर्ड गलत है (Invalid email or password)" };
+      if (/not confirmed/i.test(msg)) return { ok: false, error: "❌ ईमेल कन्फर्म नहीं है — Supabase में user को Confirm करें" };
+      return { ok: false, error: `❌ साइन-इन नहीं हुआ: ${msg || "unknown error"}` };
+    }
+    setAdminAuth(data.session);
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: `❌ नेटवर्क एरर: ${err?.message || "network error"}` };
+  }
+}
+
+/** Signs out, forgets the cached admin data (it holds the passcodes) and the passcode session. */
+export async function signOutAdmin(): Promise<void> {
+  try {
+    await supabase?.auth.signOut();
+  } catch {
+    // ignore
+  }
+  try {
+    localStorage.removeItem(ADMIN_AUTH_STORAGE_KEY);
+    localStorage.removeItem("studybull_zero_nodes_v1");
+    localStorage.removeItem("studybull_zero_settings_v1");
+    sessionStorage.removeItem("studybull_admin_session");
+  } catch {
+    // ignore
+  }
+  setAdminAuth(null);
+}
+
+export function onAdminAuthChange(fn: (signedIn: boolean, email: string | null) => void): () => void {
+  authListeners.add(fn);
+  return () => {
+    authListeners.delete(fn);
+  };
+}
+
 let currentConfig = getStoredSupabaseConfig();
 export let isSupabaseConfigured = currentConfig.isConfigured;
 
 export let supabase: SupabaseClient | null = currentConfig.isConfigured
-  ? createClient(currentConfig.url, currentConfig.key, {
-      auth: { persistSession: false },
-    })
+  ? makeClient(currentConfig.url, currentConfig.key)
   : null;
+wireAuth(supabase);
 
 export function setSupabaseCredentials(rawUrl: string, rawKey: string): { success: boolean; message: string } {
   const normUrl = normalizeSupabaseUrl(rawUrl);
@@ -125,9 +234,9 @@ export function setSupabaseCredentials(rawUrl: string, rawKey: string): { succes
 
   currentConfig = getStoredSupabaseConfig();
   isSupabaseConfigured = currentConfig.isConfigured;
-  supabase = createClient(normUrl, normKey, {
-    auth: { persistSession: false },
-  });
+  supabase = makeClient(normUrl, normKey);
+  wireAuth(supabase);
+  void restoreAdminSession();
 
   return { success: true, message: "Supabase credentials updated successfully!" };
 }
@@ -142,10 +251,10 @@ export function clearSupabaseCredentials() {
   currentConfig = getStoredSupabaseConfig();
   isSupabaseConfigured = currentConfig.isConfigured;
   supabase = currentConfig.isConfigured
-    ? createClient(currentConfig.url, currentConfig.key, {
-        auth: { persistSession: false },
-      })
+    ? makeClient(currentConfig.url, currentConfig.key)
     : null;
+  wireAuth(supabase);
+  void restoreAdminSession();
 }
 
 export async function testSupabaseConnection(): Promise<{ success: boolean; message: string }> {
@@ -350,7 +459,8 @@ export async function fetchStudyBullStateFromSupabase<TNode = unknown, TSettings
   settings: Partial<TSettings>;
   updatedAt?: string;
 } | null> {
-  if (!supabase) return null;
+  // Nothing loads without the admin's email login (the database only answers the signed-in admin anyway)
+  if (!supabase || !adminSignedIn) return null;
   const client = supabase;
 
   try {
@@ -473,6 +583,7 @@ async function saveWithRetry(p: SavePayload): Promise<boolean> {
 
 async function saveSplitOnce(p: SavePayload): Promise<{ ok: boolean; rows?: number; error?: string }> {
   if (!supabase) return { ok: false, error: "database not configured" };
+  if (!adminSignedIn) return { ok: false, error: "ईमेल लॉगिन नहीं है — दोबारा साइन-इन करें (not signed in)" };
   const client = supabase;
   try {
     const nodes: any[] = Array.isArray(p.nodes) ? (p.nodes as any[]) : [];
@@ -557,6 +668,10 @@ function queueMainWrite(p: { nodes: unknown[]; settings: unknown; at: string }) 
 
 async function writeMain(p: { nodes: unknown[]; settings: unknown; at: string }): Promise<string | null> {
   if (!supabase) return "database not configured";
+  if (!adminSignedIn) return "not signed in";
+  // Never write settings (passcodes) into "main" unless this tab actually read main.settings first —
+  // otherwise default passcodes could overwrite the real ones.
+  if (lastMainSettingsJson === null) return null;
   try {
     // settings only (see saveSplitOnce step 3); main.nodes and main.updated_at stay as they are
     const { error } = await supabase
@@ -609,7 +724,7 @@ export async function saveStudyBullStateToSupabase<TNode = unknown, TSettings = 
   settings: TSettings,
   immediate = false
 ): Promise<boolean> {
-  if (!supabase) return false;
+  if (!supabase || !adminSignedIn) return false;
 
   lastPendingPayload = { nodes: nodes as unknown[], settings: settings as unknown };
 
@@ -639,7 +754,7 @@ export async function saveStudyBullStateToSupabase<TNode = unknown, TSettings = 
 export function subscribeToStudyBullState<TNode = unknown, TSettings = unknown>(
   onUpdate: (payload: { nodes: TNode[]; settings: Partial<TSettings> }) => void
 ): () => void {
-  if (!supabase) return () => {};
+  if (!supabase || !adminSignedIn) return () => {};
 
   let isSubscribed = true;
 
