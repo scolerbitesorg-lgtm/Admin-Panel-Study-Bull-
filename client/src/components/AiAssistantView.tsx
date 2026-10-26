@@ -54,6 +54,7 @@ type Item = {
   caNotes?: string;
   pyq?: string;
   needHindi?: boolean;
+  generated?: boolean; // written by the AI (not pasted by Aarav)
 };
 type Proposal = {
   id: string;
@@ -566,7 +567,7 @@ export default function AiAssistantView({ nodes, onCommit }: Props) {
             errors.push(bad ? `नोट्स में "${bad}" है — साइट पर छिप सकता है` : "नोट्स खाली बने");
             continue;
           }
-          items.push({ ...base, title, icon, targetId: existing?.id, notesText: text });
+          items.push({ ...base, title, icon, targetId: existing?.id, notesText: text, generated: !fromPaste });
           continue;
         }
 
@@ -613,7 +614,7 @@ export default function AiAssistantView({ nodes, onCommit }: Props) {
                 pattern: (Array.isArray(t.sections) ? t.sections : []).map((s: any) => `${s?.name} ${s?.count}`).join(", "),
               }
             : undefined;
-        items.push({ ...base, kind: type === "mock" ? "mock" : "mcq", title, icon, targetId: existing?.id, questions: valid, mock: mockCfg, needHindi });
+        items.push({ ...base, kind: type === "mock" ? "mock" : "mcq", title, icon, targetId: existing?.id, questions: valid, mock: mockCfg, needHindi, generated: !fromPaste });
       }
       if (paste && !pasteUsed && items.length) warnings.push("पेस्ट किया text किसी item में नहीं लगा — देख लें");
 
@@ -862,6 +863,11 @@ function ProposalCard({ p, nodes, onAdd, onCancel, disabled }: { p: Proposal; no
         {p.items.map((it, i) => (
           <ItemPreview key={i} it={it} nodes={nodes} />
         ))}
+        {p.items.some(it => it.generated) && (
+          <div style={{ fontSize: 12.5, color: "#1e40af", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: 8 }}>
+            🤖 ये AI ने लिखा है और AI ने ही एक बार जाँचा है — फिर भी Add से पहले एक नज़र पढ़ लें (AI गलती कर सकता है)।
+          </div>
+        )}
         {p.sizeLine && <div style={{ fontSize: 12, color: "#475569" }}>📦 साइज़: {p.sizeLine} (सीमा 2.5 MB/टाइल)</div>}
         {p.warnings.length > 0 && (
           <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: 8, fontSize: 12.5, color: "#78350f" }}>

@@ -92,7 +92,7 @@ Do not add a separate "folder" task for a folder that another task already creat
 const MCQ_SYSTEM = `${RULES_COMMON}
 Write NEW original exam MCQs for StudyBull. Each MCQ: question, exactly 4 distinct options, exactly one correct answer (index 0-3), and a one-line explanation in Hindi.
 Language: if lang is "hi" write the question, options and explanation in Hindi (Devanagari); you may add a short English term in brackets. If lang is "en" write question/options in English and the explanation in Hindi (Devanagari).
-Do not repeat any question from the AVOID list. Vary the correct option position. Facts must be standard and certain; skip doubtful facts.
+Do not repeat any question from the AVOID list. Vary the correct option position. Use only well-known, standard facts that are often asked in SSC/Railway/Police exams and that you are fully sure of; never invent names, terms, quotes or dates; distractors must be real but wrong options of the same type.
 Never write the text "var " anywhere. Do not add any [PYQ: ...] tag.
 Output: {"questions":[{"q":"...","o":["...","...","...","..."],"a":0,"e":"..."}]}`;
 
@@ -105,7 +105,7 @@ Output: {"questions":[{"q":"...","o":["...","...","...","..."],"a":0,"e":"..."}]
 
 const VERIFY_SYSTEM = `${RULES_COMMON}
 You are a strict fact-checker for exam MCQs (Indian competitive exams, NCERT/Lucent standard).
-For EACH MCQ check: the marked answer (index "a", 0-3) is definitely correct; exactly one option is correct; the question and explanation contain no false fact; it is not ambiguous. If you are not sure, mark it not ok.
+For EACH MCQ check: the marked answer (index "a", 0-3) is definitely correct; exactly one option is correct; the question and explanation contain no false fact; every quoted word/phrase/name really exists in the source it claims (e.g. exact words of the Preamble, real battle/book/person names); it is not ambiguous or trivial nonsense. If you are not fully sure, mark it not ok — dropping a good question is fine, keeping a wrong one is not.
 Output: {"results":[{"i":0,"ok":true,"why":""}]} with one entry per MCQ, in order; "why" = at most 8 English words, only when not ok.`;
 
 const NOTES_SYSTEM = `${RULES_COMMON}
@@ -287,8 +287,14 @@ export default async function handler(req, res) {
   const messages = buildMessages(mode, (body && body.input) || {});
   if (!messages) return send(res, 400, { ok: false, code: "bad_mode" });
   const want = mode === "plan" ? 900 : mode === "notes" ? 1000 : mode === "typing" ? 900 : 1000;
-  const effort = mode === "mcq" || mode === "verify" || mode === "notes" ? "medium" : "low";
-  const r = await callAI(messages, want, effort);
+  // Karya route caps each answer at 1024 tokens, so heavy thinking only runs on the direct route
+  const effort = mode === "verify" && process.env.GROQ_API_KEY ? "high" : mode === "mcq" || mode === "verify" || mode === "notes" ? "medium" : "low";
+  let r = await callAI(messages, want, effort);
+  // thinking ran out of room (1024-token answers on the Karya route) → one quick retry with light thinking
+  if (r.ok && effort !== "low") {
+    const c0 = r.j && r.j.choices && r.j.choices[0];
+    if (!extractJson(c0 && c0.message && c0.message.content)) r = await callAI(messages, want, "low");
+  }
   if (!r.ok) {
     const st = r.status || 502;
     const code = st === 429 ? "busy" : st === 401 || st === 403 || st === 500 ? "nokey" : st === 504 ? "timeout" : "ai_error";
