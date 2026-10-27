@@ -74,6 +74,7 @@ import {
 import SandboxedHtmlView from "@/components/SandboxedHtmlView";
 import { lazy, Suspense } from "react";
 const ViewsStatsView = lazy(() => import("@/components/ViewsStatsView"));
+const UsersView = lazy(() => import("@/components/UsersView"));
 const AiAssistantView = lazy(() => import("@/components/AiAssistantView"));
 
 type Kind =
@@ -3072,7 +3073,7 @@ export default function Home() {
 
   // Navigation: "manager" vs "settings" vs "create_passcode" vs "active_passcodes" (opened from Menu Button)
   const [activeView, setActiveView] = useState<
-    "manager" | "settings" | "create_passcode" | "active_passcodes" | "views" | "ai"
+    "manager" | "settings" | "create_passcode" | "active_passcodes" | "views" | "users" | "ai"
   >("manager");
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -4577,6 +4578,19 @@ export default function Home() {
 
             <button
               className={`menu-nav-btn ${
+                activeView === "users" ? "active" : ""
+              }`}
+              data-sb-nav-users="1"
+              onClick={() => {
+                setActiveView("users");
+                setMenuOpen(false);
+              }}
+            >
+              <span style={{ fontSize: 17, width: 18, textAlign: "center" }}>👥</span> Users (कौन आया, क्या किया)
+            </button>
+
+            <button
+              className={`menu-nav-btn ${
                 activeView === "ai" ? "active" : ""
               }`}
               data-sb-nav-ai="1"
@@ -4696,6 +4710,8 @@ export default function Home() {
                   ? `${appSettings.appName} — 🤖 AI Assistant`
                   : activeView === "views"
                   ? `${appSettings.appName} — 📊 Views`
+                  : activeView === "users"
+                  ? `${appSettings.appName} — 👥 Users`
                   : activeView === "settings"
                   ? `${appSettings.appName} — Settings & Admin Control`
                   : activeView === "create_passcode"
@@ -4709,6 +4725,8 @@ export default function Home() {
                   ? "Chat या paste से सिर्फ़ नया data जोड़ें • preview → ✅ Add • पुराना data कभी नहीं बदलता"
                   : activeView === "views"
                   ? "User site visitors per day • last 7 / 30 days • top buttons"
+                  : activeView === "users"
+                  ? "हर डिवाइस = user01, user02… • पहली/आख़िरी विज़िट • मॉक/क्विज़/टाइपिंग history • LIVE"
                   : activeView === "settings"
                   ? "Customize User App Name, Logo, Theme Colors & Maintenance Mode"
                   : activeView === "create_passcode"
@@ -5146,6 +5164,10 @@ export default function Home() {
           ) : activeView === "views" ? (
             <Suspense fallback={<div className="panel" style={{ padding: 24, textAlign: "center", color: "#64748b" }}>लोड हो रहा है…</div>}>
               <ViewsStatsView />
+            </Suspense>
+          ) : activeView === "users" ? (
+            <Suspense fallback={<div className="panel" style={{ padding: 24, textAlign: "center", color: "#64748b" }}>लोड हो रहा है…</div>}>
+              <UsersView />
             </Suspense>
           ) : activeView === "settings" ? (
             /* =================================================================
