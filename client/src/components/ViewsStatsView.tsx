@@ -1,15 +1,27 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { supabase } from "@/lib/supabase";
 
-/* 📊 VIEWS — how many people opened the user site, day by day (Aarav, Oct 26 2026 11:04 PM).
+/* 📊 VIEWS — how many people opened the user site (Aarav, Oct 26 2026 11:04 PM; clearer cards Oct 27 10:12 AM).
  * Data: table public.studybull_views (one row per India-date per page: '_site' or 'tile:<home button>').
- * The user site only adds +1 through the function studybull_track_visit (via its /api/hit route);
- * only the admin email login can read the table (Row Level Security). Created by studybull_views.sql. */
+ *   visitors     = unique devices that day (a device counts once per IST day)
+ *   new_visitors = devices visiting for the first time ever
+ *   opens        = every open of the site (50 opens by one phone = 50)
+ * Derived here: old (returning) users = visitors − new_visitors; total users (all time) = Σ new_visitors;
+ * total opens (all time) = Σ opens. The user site only adds +1 through studybull_track_visit (/api/hit);
+ * only the admin email login can read the table (RLS). Created by studybull_views.sql. */
 
 type Row = { day: string; page: string; visitors: number; opens: number; new_visitors: number; updated_at?: string };
+type RangeKey = "today" | "yesterday" | "7" | "30" | "all";
+
+const COUNT_START = "2026-10-27"; // counter went live 27 Oct 2026, 6:23 AM IST
+const TEST_DAY = "2026-10-27"; // ~30 of that day's visits were Tab's own speed testing
 
 function istDay(offsetDays = 0): string {
   return new Date(Date.now() + 5.5 * 3600 * 1000 - offsetDays * 86400000).toISOString().slice(0, 10);
+}
+function addDays(d: string, n: number): string {
+  const t = new Date(d + "T00:00:00Z").getTime() + n * 86400000;
+  return new Date(t).toISOString().slice(0, 10);
 }
 
 const HI_MONTHS = ["जन", "फ़र", "मार्च", "अप्रै", "मई", "जून", "जुला", "अग", "सितं", "अक्टू", "नवं", "दिसं"];
@@ -18,36 +30,42 @@ function shortDate(d: string): string {
   return `${day} ${HI_MONTHS[(m || 1) - 1]}`;
 }
 const fmt = (n: number) => n.toLocaleString("en-IN");
+const num = (x: unknown) => Number(x) || 0;
 
-function Stat({ label, value, sub, color }: { label: string; value: string; sub?: string; color: string }) {
-  return (
-    <div style={{ background: "#fff", border: "1px solid #e5eaf2", borderRadius: 16, padding: "14px 14px 12px", minWidth: 0 }}>
-      <div style={{ fontSize: 12, color: "#64748b", fontWeight: 700 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 900, color, lineHeight: 1.15, marginTop: 4 }}>{value}</div>
-      {sub && <div style={{ fontSize: 11.5, color: "#64748b", marginTop: 3 }}>{sub}</div>}
-    </div>
-  );
-}
+const RANGES: { key: RangeKey; label: string }[] = [
+  { key: "today", label: "आज" },
+  { key: "yesterday", label: "कल" },
+  { key: "7", label: "7 दिन" },
+  { key: "30", label: "30 दिन" },
+  { key: "all", label: "सब" },
+];
 
-function BarRow({ label, value, max, right, color }: { label: string; value: number; max: number; right: string; color: string }) {
-  const pct = max > 0 ? Math.max(value > 0 ? 3 : 0, Math.round((value / max) * 100)) : 0;
+function Card({ icon, title, value, explain, color, bg, id, wide }: { icon: string; title: string; value: string; explain: string; color: string; bg: string; id: string; wide?: boolean }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "64px 1fr auto", alignItems: "center", gap: 8, padding: "5px 0" }}>
-      <div style={{ fontSize: 12.5, color: "#334155", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
-      <div style={{ height: 14, background: "#eef2f7", borderRadius: 7, overflow: "hidden" }}>
-        <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 7, transition: "width .3s" }} />
+    <div
+      data-sb-views-card={id}
+      style={{ background: bg, border: `1px solid ${color}33`, borderRadius: 16, padding: "12px 13px 11px", minWidth: 0, gridColumn: wide ? "1 / -1" : undefined }}
+    >
+      <div style={{ fontSize: 12.5, color: "#334155", fontWeight: 800, lineHeight: 1.3 }}>
+        <span style={{ marginRight: 4 }}>{icon}</span>
+        {title}
       </div>
-      <div style={{ fontSize: 12, color: "#0f172a", fontWeight: 800, whiteSpace: "nowrap", textAlign: "right" }}>{right}</div>
+      <div data-sb-views-value={id} style={{ fontSize: 30, fontWeight: 900, color, lineHeight: 1.1, marginTop: 4 }}>
+        {value}
+      </div>
+      <div style={{ fontSize: 11.5, color: "#475569", marginTop: 4, lineHeight: 1.4 }}>{explain}</div>
     </div>
   );
 }
+
+const TH: CSSProperties = { fontSize: 11, color: "#64748b", fontWeight: 800, padding: "6px 4px", textAlign: "right", whiteSpace: "nowrap", borderBottom: "1px solid #e5eaf2" };
+const TD: CSSProperties = { fontSize: 13, color: "#0f172a", fontWeight: 700, padding: "7px 4px", textAlign: "right", whiteSpace: "nowrap", borderBottom: "1px solid #f1f5f9" };
 
 export default function ViewsStatsView() {
   const [rows, setRows] = useState<Row[]>([]);
-  const [allSite, setAllSite] = useState<Row[]>([]);
   const [state, setState] = useState<"loading" | "ok" | "pending" | "error">("loading");
   const [err, setErr] = useState("");
-  const [range, setRange] = useState<7 | 30>(7);
+  const [range, setRange] = useState<RangeKey>("today");
   const [loadedAt, setLoadedAt] = useState<Date | null>(null);
 
   const load = async () => {
@@ -58,24 +76,31 @@ export default function ViewsStatsView() {
     }
     setState(s => (s === "ok" ? "ok" : "loading"));
     try {
-      const since = istDay(29);
-      const [recent, site] = await Promise.all([
-        supabase.from("studybull_views").select("day,page,visitors,opens,new_visitors,updated_at").gte("day", since).limit(5000),
-        supabase.from("studybull_views").select("day,page,visitors,opens,new_visitors").eq("page", "_site").limit(5000),
-      ]);
-      const e = recent.error || site.error;
-      if (e) {
-        const msg = `${(e as any).code || ""} ${e.message || ""}`;
-        if (/PGRST205|42P01|does not exist|Could not find the table|schema cache/i.test(msg)) {
-          setState("pending");
-        } else {
-          setState("error");
-          setErr(e.message || "पढ़ नहीं पाए");
+      // all rows (small table: ~10 rows a day); page through in 1000s (PostgREST row cap)
+      const all: Row[] = [];
+      for (let from = 0; from < 100000; from += 1000) {
+        const r = await supabase
+          .from("studybull_views")
+          .select("day,page,visitors,opens,new_visitors,updated_at")
+          .order("day", { ascending: true })
+          .order("page", { ascending: true })
+          .range(from, from + 999);
+        if (r.error) {
+          const e = r.error;
+          const msg = `${(e as any).code || ""} ${e.message || ""}`;
+          if (/PGRST205|42P01|does not exist|Could not find the table|schema cache/i.test(msg)) {
+            setState("pending");
+          } else {
+            setState("error");
+            setErr(e.message || "पढ़ नहीं पाए");
+          }
+          return;
         }
-        return;
+        const got = (r.data || []) as Row[];
+        all.push(...got);
+        if (got.length < 1000) break;
       }
-      setRows((recent.data || []) as Row[]);
-      setAllSite((site.data || []) as Row[]);
+      setRows(all);
       setLoadedAt(new Date());
       setState("ok");
     } catch (x: any) {
@@ -91,47 +116,68 @@ export default function ViewsStatsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const today = istDay(0);
+
   const data = useMemo(() => {
+    const siteRows = rows.filter(r => r.page === "_site");
     const site = new Map<string, Row>();
-    rows.filter(r => r.page === "_site").forEach(r => site.set(r.day, r));
-    const days = (n: number) => Array.from({ length: n }, (_, i) => istDay(i));
-    const pick = (d: string) => site.get(d) || { day: d, page: "_site", visitors: 0, opens: 0, new_visitors: 0 };
-    const sum = (list: Row[], k: "visitors" | "opens" | "new_visitors") => list.reduce((a, r) => a + (Number(r[k]) || 0), 0);
-    const last7 = days(7).map(pick);
-    const last30 = days(30).map(pick);
-    const since7 = istDay(6);
+    siteRows.forEach(r => site.set(r.day, r));
+    const firstDay = siteRows.reduce((m, r) => (!m || r.day < m ? r.day : m), "") || COUNT_START;
+
+    // days in the chosen range, newest first
+    let from: string;
+    let to = today;
+    if (range === "today") from = today;
+    else if (range === "yesterday") from = to = istDay(1);
+    else if (range === "7") from = istDay(6);
+    else if (range === "30") from = istDay(29);
+    else from = firstDay < today ? firstDay : today;
+    if (range !== "yesterday" && from < firstDay && range !== "today") from = firstDay;
+    const days: string[] = [];
+    for (let d = to; d >= from; d = addDays(d, -1)) days.push(d);
+
+    const pick = (d: string) => {
+      const r = site.get(d);
+      const users = num(r?.visitors);
+      const nw = num(r?.new_visitors);
+      return { day: d, users, nw, old: Math.max(0, users - nw), opens: num(r?.opens) };
+    };
+    const daily = days.map(pick);
+    const sum = (k: "users" | "nw" | "old" | "opens") => daily.reduce((a, r) => a + r[k], 0);
+
     const tiles = new Map<string, { v: number; o: number }>();
     rows
-      .filter(r => r.page.startsWith("tile:") && r.day >= (range === 7 ? since7 : istDay(29)))
+      .filter(r => r.page.startsWith("tile:") && r.day >= from && r.day <= to)
       .forEach(r => {
         const k = r.page.slice(5);
         const t = tiles.get(k) || { v: 0, o: 0 };
-        t.v += Number(r.visitors) || 0;
-        t.o += Number(r.opens) || 0;
+        t.v += num(r.visitors);
+        t.o += num(r.opens);
         tiles.set(k, t);
       });
-    const topTiles = [...tiles.entries()].sort((a, b) => b[1].o - a[1].o).slice(0, 10);
-    const firstDay = allSite.reduce((m, r) => (!m || r.day < m ? r.day : m), "");
-    return {
-      today: pick(istDay(0)),
-      yesterday: pick(istDay(1)),
-      last7,
-      last30,
-      v7: sum(last7, "visitors"),
-      o7: sum(last7, "opens"),
-      v30: sum(last30, "visitors"),
-      o30: sum(last30, "opens"),
-      vAll: sum(allSite, "visitors"),
-      oAll: sum(allSite, "opens"),
-      nAll: sum(allSite, "new_visitors"),
-      firstDay,
-      topTiles,
-    };
-  }, [rows, allSite, range]);
+    const tileList = [...tiles.entries()].sort((a, b) => b[1].o - a[1].o || b[1].v - a[1].v);
 
-  const list = range === 7 ? data.last7 : data.last30;
-  const maxV = Math.max(1, ...list.map(r => r.opens));
-  const maxT = Math.max(1, ...data.topTiles.map(t => t[1].o));
+    return {
+      firstDay,
+      days,
+      daily,
+      single: days.length === 1,
+      users: sum("users"),
+      nw: sum("nw"),
+      old: sum("old"),
+      opens: sum("opens"),
+      totalUsers: siteRows.reduce((a, r) => a + num(r.new_visitors), 0),
+      totalOpens: siteRows.reduce((a, r) => a + num(r.opens), 0),
+      tileList,
+      includesTestDay: days.includes(TEST_DAY),
+    };
+  }, [rows, range, today]);
+
+  const rangeName =
+    range === "today" ? "आज" : range === "yesterday" ? "कल" : range === "7" ? "पिछले 7 दिन" : range === "30" ? "पिछले 30 दिन" : "शुरू से अब तक";
+  const avg = data.users > 0 ? data.opens / data.users : 0;
+  const maxOpens = Math.max(1, ...data.daily.map(r => r.opens));
+  const maxT = Math.max(1, ...data.tileList.map(t => t[1].o));
 
   return (
     <div style={{ maxWidth: 760, margin: "0 auto", paddingBottom: 40 }} data-sb-views="1">
@@ -139,9 +185,9 @@ export default function ViewsStatsView() {
         <div className="page-banner-left">
           <div className="page-big-icon emerald" style={{ fontSize: 26 }}>📊</div>
           <div className="page-banner-info">
-            <span className="section-kicker">USER SITE • DAILY VISITORS</span>
-            <h2>📊 Views — कितने लोगों ने साइट खोली</h2>
-            <p>studybull.vercel.app रोज़ कितने लोगों ने खोली (भारत की तारीख से)। सिर्फ गिनती, किसी की निजी जानकारी नहीं।</p>
+            <span className="section-kicker">USER SITE • USERS & OPENS</span>
+            <h2>📊 Views — कितने लोग आए, कितनी बार खुली</h2>
+            <p>studybull.vercel.app की गिनती (भारत की तारीख से)। सिर्फ गिनती, किसी की निजी जानकारी नहीं।</p>
           </div>
         </div>
         <div className="page-banner-actions">
@@ -159,9 +205,6 @@ export default function ViewsStatsView() {
             <li><b>studybull_views.sql</b> (Tab ने भेजी) पूरी paste करें → <b>Run</b></li>
             <li>आखिरी लाइन में <b>studybull_views | true</b> दिखे = हो गया</li>
           </ol>
-          <div style={{ fontSize: 12.5, color: "#92400e", marginTop: 10 }}>
-            उसके बाद से हर visit यहाँ गिनी जाएगी। तब तक पूरा डेटा Vercel → studybull → <b>Analytics</b> में है।
-          </div>
         </div>
       )}
 
@@ -173,64 +216,161 @@ export default function ViewsStatsView() {
 
       {state === "ok" && (
         <div data-sb-views-state="ok">
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 12 }}>
-            <Stat label="👥 आज के विज़िटर" value={fmt(data.today.visitors)} sub={`🆕 नए: ${fmt(data.today.new_visitors)}`} color="#0f766e" />
-            <Stat label="👁️ आज कितनी बार खुली" value={fmt(data.today.opens)} sub={`कल: ${fmt(data.yesterday.visitors)} विज़िटर • ${fmt(data.yesterday.opens)} बार`} color="#2563eb" />
-            <Stat label="📅 पिछले 7 दिन" value={fmt(data.v7)} sub={`विज़िटर • ${fmt(data.o7)} बार खुली`} color="#7c3aed" />
-            <Stat label="🗓️ पिछले 30 दिन" value={fmt(data.v30)} sub={`विज़िटर • ${fmt(data.o30)} बार खुली`} color="#b45309" />
-          </div>
-          <div className="panel" style={{ padding: "12px 14px", marginBottom: 12, display: "flex", flexWrap: "wrap", gap: "6px 16px", fontSize: 13, color: "#334155" }}>
-            <span>🏁 <b>कुल (शुरू से)</b>: {fmt(data.vAll)} विज़िटर</span>
-            <span>👁️ {fmt(data.oAll)} बार खुली</span>
-            <span>🆕 {fmt(data.nAll)} अलग डिवाइस</span>
-            {data.firstDay && <span style={{ color: "#64748b" }}>गिनती {shortDate(data.firstDay)} से</span>}
-          </div>
-
-          <div className="panel" style={{ padding: 14, marginBottom: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
-              <b style={{ fontSize: 15 }}>📈 रोज़ का हिसाब</b>
-              <div style={{ display: "flex", gap: 6 }}>
-                {[7, 30].map(n => (
-                  <button
-                    key={n}
-                    onClick={() => setRange(n as 7 | 30)}
-                    className="outline-btn"
-                    style={{ padding: "5px 12px", fontWeight: 800, ...(range === n ? { background: "#0f766e", color: "#fff", borderColor: "#0f766e" } : {}) }}
-                  >
-                    {n} दिन
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 6 }}>पट्टी = कितनी बार खुली • दाएँ: 👥 विज़िटर / 👁️ बार</div>
-            {list.map(r => (
-              <BarRow key={r.day} label={r.day === istDay(0) ? "आज" : shortDate(r.day)} value={r.opens} max={maxV} right={`👥 ${fmt(r.visitors)} / 👁️ ${fmt(r.opens)}`} color="linear-gradient(90deg,#14b8a6,#0f766e)" />
+          {/* range tabs */}
+          <div data-sb-views-range="1" style={{ display: "flex", gap: 6, overflowX: "auto", padding: "2px 0 10px", WebkitOverflowScrolling: "touch" }}>
+            {RANGES.map(r => (
+              <button
+                key={r.key}
+                data-sb-views-tab={r.key}
+                onClick={() => setRange(r.key)}
+                className="outline-btn"
+                style={{
+                  padding: "7px 14px",
+                  fontWeight: 800,
+                  fontSize: 13.5,
+                  whiteSpace: "nowrap",
+                  flex: "0 0 auto",
+                  borderRadius: 999,
+                  ...(range === r.key ? { background: "#0f766e", color: "#fff", borderColor: "#0f766e" } : {}),
+                }}
+              >
+                {r.label}
+              </button>
             ))}
           </div>
 
+          {/* all-time card */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 10 }}>
+            <Card
+              id="total-users"
+              wide
+              icon="👥"
+              title="Total users (ab tak, सब मिलाकर)"
+              value={fmt(data.totalUsers)}
+              explain={`अब तक कितने अलग-अलग device (फ़ोन/कंप्यूटर) आए — एक device हमेशा 1 ही गिना। कुल web opens ab tak: ${fmt(data.totalOpens)}`}
+              color="#0f172a"
+              bg="#f8fafc"
+            />
+          </div>
+
+          <div style={{ fontSize: 13, fontWeight: 900, color: "#0f766e", margin: "4px 2px 8px" }}>
+            📅 {rangeName}
+            {!data.single && data.days.length > 0 && (
+              <span style={{ fontWeight: 700, color: "#64748b" }}> ({shortDate(data.days[data.days.length - 1])} – {shortDate(data.days[0])})</span>
+            )}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 12 }}>
+            <Card
+              id="users"
+              icon="👤"
+              title={data.single ? `${rangeName} के users (unique)` : "Users (रोज़ के unique का जोड़)"}
+              value={fmt(data.users)}
+              explain={data.single ? "एक device दिन में 1 बार गिना — 50 बार खोले तब भी 1" : "हर दिन के unique users जोड़े; जो device 3 दिन आया = 3"}
+              color="#0f766e"
+              bg="#f0fdfa"
+            />
+            <Card id="new" icon="🆕" title="New users" value={fmt(data.nw)} explain="पहली बार आए (हर device ज़िंदगी में 1 बार)" color="#7c3aed" bg="#f5f3ff" />
+            <Card
+              id="old"
+              icon="🔁"
+              title="Purane users (wapas aaye)"
+              value={fmt(data.old)}
+              explain={data.single ? "पहले आ चुके थे, इस दिन फिर आए" : "पहले आ चुके devices की वापसी (रोज़ का जोड़)"}
+              color="#b45309"
+              bg="#fffbeb"
+            />
+            <Card id="opens" icon="👆" title="Total web opens" value={fmt(data.opens)} explain="हर बार खुलना गिना (एक user 50 बार = 50)" color="#2563eb" bg="#eff6ff" />
+            <Card
+              id="avg"
+              wide
+              icon="📊"
+              title="Avg opens per user"
+              value={data.users > 0 ? avg.toFixed(1) : "0"}
+              explain="एक user ने औसतन कितनी बार साइट खोली (opens ÷ users)"
+              color="#be185d"
+              bg="#fdf2f8"
+            />
+          </div>
+
+          <div
+            data-sb-views-note="1"
+            style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 12, padding: "8px 11px", marginBottom: 12, lineHeight: 1.5 }}
+          >
+            ℹ️ गिनती 27 अक्टू, सुबह 6:23 से शुरू हुई।
+            {data.includesTestDay && <> {today === TEST_DAY ? "आज" : "27 अक्टू"} के ~30 visits Tab की testing के हैं।</>}
+            {" "}Users = कितने लोग, Opens = कितनी बार खुली।
+          </div>
+
+          {/* daily table */}
           <div className="panel" style={{ padding: 14, marginBottom: 12 }}>
-            <b style={{ fontSize: 15 }}>🔥 सबसे ज़्यादा खुले बटन ({range} दिन)</b>
-            {data.topTiles.length === 0 ? (
-              <div style={{ fontSize: 13, color: "#64748b", marginTop: 8 }}>अभी कोई डेटा नहीं।</div>
+            <b style={{ fontSize: 15 }}>📈 रोज़ का हिसाब</b>
+            <div style={{ overflowX: "auto", marginTop: 6 }}>
+              <table data-sb-views-daily="1" style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...TH, textAlign: "left" }}>तारीख</th>
+                    <th style={TH}>👤 Users</th>
+                    <th style={TH}>🆕 New</th>
+                    <th style={TH}>🔁 Old</th>
+                    <th style={TH}>👆 Opens</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.daily.map(r => (
+                    <tr key={r.day}>
+                      <td style={{ ...TD, textAlign: "left" }}>
+                        {r.day === today ? "आज" : r.day === istDay(1) ? "कल" : shortDate(r.day)}
+                        <div style={{ height: 4, background: "#eef2f7", borderRadius: 2, marginTop: 3, width: 64 }}>
+                          <div style={{ height: "100%", width: `${r.opens > 0 ? Math.max(4, Math.round((r.opens / maxOpens) * 100)) : 0}%`, background: "#2563eb", borderRadius: 2 }} />
+                        </div>
+                      </td>
+                      <td style={{ ...TD, color: "#0f766e" }}>{fmt(r.users)}</td>
+                      <td style={{ ...TD, color: "#7c3aed" }}>{fmt(r.nw)}</td>
+                      <td style={{ ...TD, color: "#b45309" }}>{fmt(r.old)}</td>
+                      <td style={{ ...TD, color: "#2563eb" }}>{fmt(r.opens)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>नीली पट्टी = उस दिन कितनी बार खुली</div>
+          </div>
+
+          {/* per-button table */}
+          <div className="panel" style={{ padding: 14, marginBottom: 12 }}>
+            <b style={{ fontSize: 15 }}>🔘 कौन-सा बटन कितना खुला ({rangeName})</b>
+            <div style={{ fontSize: 11.5, color: "#64748b", marginTop: 2 }}>👤 Users = कितने device ने खोला (दिन में 1 बार) • 👆 Opens = कुल कितनी बार</div>
+            {data.tileList.length === 0 ? (
+              <div style={{ fontSize: 13, color: "#64748b", marginTop: 8 }}>इस समय में कोई बटन नहीं खुला।</div>
             ) : (
-              <div style={{ marginTop: 6 }}>
-                {data.topTiles.map(([name, t]) => (
-                  <div key={name} style={{ padding: "4px 0" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700, color: "#1e293b", gap: 8 }}>
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
-                      <span style={{ whiteSpace: "nowrap" }}>👁️ {fmt(t.o)} • 👥 {fmt(t.v)}</span>
-                    </div>
-                    <div style={{ height: 10, background: "#eef2f7", borderRadius: 5, overflow: "hidden", marginTop: 3 }}>
-                      <div style={{ width: `${Math.max(3, Math.round((t.o / maxT) * 100))}%`, height: "100%", background: "linear-gradient(90deg,#818cf8,#4f46e5)" }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <table data-sb-views-tiles="1" style={{ width: "100%", borderCollapse: "collapse", marginTop: 6, tableLayout: "fixed" }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...TH, textAlign: "left" }}>बटन</th>
+                    <th style={{ ...TH, width: 74 }}>👤 Users</th>
+                    <th style={{ ...TH, width: 74 }}>👆 Opens</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.tileList.map(([name, t]) => (
+                    <tr key={name}>
+                      <td style={{ ...TD, textAlign: "left", whiteSpace: "normal" }}>
+                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
+                        <div style={{ height: 4, background: "#eef2f7", borderRadius: 2, marginTop: 3 }}>
+                          <div style={{ height: "100%", width: `${Math.max(3, Math.round((t.o / maxT) * 100))}%`, background: "#4f46e5", borderRadius: 2 }} />
+                        </div>
+                      </td>
+                      <td style={{ ...TD, color: "#0f766e" }}>{fmt(t.v)}</td>
+                      <td style={{ ...TD, color: "#2563eb" }}>{fmt(t.o)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
 
           <div style={{ fontSize: 11.5, color: "#64748b", lineHeight: 1.6, padding: "0 4px" }}>
-            👥 विज़िटर = उस दिन अलग-अलग डिवाइस (एक फ़ोन दिन में 10 बार खोले तो 1 विज़िटर, 10 बार)। 7/30 दिन वाले विज़िटर रोज़ के जोड़ हैं।
             Bots नहीं गिने जाते। {loadedAt && <>अपडेट: {loadedAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })} (हर मिनट खुद रिफ्रेश)</>}
             <br />इस काउंटर से पहले का डेटा: Vercel → studybull → Analytics.
           </div>
