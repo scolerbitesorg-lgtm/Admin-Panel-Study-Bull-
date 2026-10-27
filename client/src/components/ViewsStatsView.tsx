@@ -138,8 +138,10 @@ export default function ViewsStatsView() {
 
     const pick = (d: string) => {
       const r = site.get(d);
-      const users = num(r?.visitors);
       const nw = num(r?.new_visitors);
+      // a new device is always a user of that day; before the Oct 27 ~10:40 AM site fix some new devices
+      // were not added to visitors (button tapped in the first 2.5 s), so never show fewer users than new users
+      const users = Math.max(num(r?.visitors), nw);
       return { day: d, users, nw, old: Math.max(0, users - nw), opens: num(r?.opens) };
     };
     const daily = days.map(pick);
@@ -298,7 +300,9 @@ export default function ViewsStatsView() {
             style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 12, padding: "8px 11px", marginBottom: 12, lineHeight: 1.5 }}
           >
             ℹ️ गिनती 27 अक्टू, सुबह 6:23 से शुरू हुई।
-            {data.includesTestDay && <> {today === TEST_DAY ? "आज" : "27 अक्टू"} के ~30 visits Tab की testing के हैं।</>}
+            {data.includesTestDay && (
+              <> {today === TEST_DAY ? "आज" : "27 अक्टू"} के ~30 visits Tab की testing के हैं, और सुबह 10:40 से पहले के कुछ users सिर्फ़ "New" में गिने गए थे (गलती ठीक कर दी)।</>
+            )}
             {" "}Users = कितने लोग, Opens = कितनी बार खुली।
           </div>
 
