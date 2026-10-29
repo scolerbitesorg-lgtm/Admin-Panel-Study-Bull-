@@ -643,7 +643,7 @@ export default function AiAssistantView({ nodes, onCommit }: Props) {
       const sizeParts: string[] = [];
       Object.values(dr.guard.tileBytes).forEach(t => {
         sizeParts.push(`${t.title}: ${fmtMB(t.before)} → ${fmtMB(t.after)}`);
-        if (t.after > TILE_WARN && t.after <= TILE_LIMIT) warnings.push(`⚠️ "${t.title}" टाइल 2.5 MB सीमा के पास (${fmtMB(t.after)}) — Quiz में अब छोटे-छोटे add ही करें`);
+        if (t.after > TILE_WARN && t.after <= TILE_LIMIT) warnings.push(`⚠️ "${t.title}" की सबसे बड़ी row 2.5 MB सीमा के पास (${fmtMB(t.after)}) — इस विषय में अब छोटे-छोटे add ही करें`);
       });
       const proposal: Proposal = {
         id: uid(),
@@ -883,7 +883,7 @@ function ProposalCard({ p, nodes, onAdd, onCancel, disabled }: { p: Proposal; no
             🤖 ये AI ने लिखा है और AI ने ही एक बार जाँचा है — फिर भी Add से पहले एक नज़र पढ़ लें (AI गलती कर सकता है)।
           </div>
         )}
-        {p.sizeLine && <div style={{ fontSize: 12, color: "#475569" }}>📦 साइज़: {p.sizeLine} (सीमा 2.5 MB/टाइल)</div>}
+        {p.sizeLine && <div style={{ fontSize: 12, color: "#475569" }}>📦 साइज़: {p.sizeLine} (सबसे बड़ी row; सीमा 2.5 MB/row)</div>}
         {p.warnings.length > 0 && (
           <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: 8, fontSize: 12.5, color: "#78350f" }}>
             {p.warnings.map((w, i) => (

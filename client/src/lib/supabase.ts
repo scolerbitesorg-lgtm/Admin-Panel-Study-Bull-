@@ -339,6 +339,50 @@ let lastMainSettingsJson: string | null = null; // main.settings as last read/wr
 let lastSplitAt = ""; // newest split save time known to this tab (index settings._split.mainAt)
 
 const tileRowId = (id: unknown) => `tile:${String(id)}`;
+
+/* ---------- STORAGE SPLIT v2 (Oct 29 2026) ----------
+ * Quiz / Notes / Mock grew to ~2.1–2.4 MB per tile row (guard 2.5 MB) and every edit re-wrote the whole row.
+ * A big tile is now stored as ONE ROW PER TOP-LEVEL CHILD (subject / exam folder):
+ *   row "tile:<tileId>:<childId>"  nodes = [childNode] (the whole folder), settings = { _v: partVersion, tile, part }
+ *   row "tile:<tileId>:_parts"     nodes = [], settings = { _v: tileVersion, tile, fmt: 2, parts: [[childId, partVersion, bytes]…], top }
+ * index._split.tiles[tileId] = tileVersion as before. The classic row "tile:<tileId>" is no longer written for a split
+ * tile (left as an old backup). Whichever of manifest / classic row carries the index version is the truth (manifest
+ * first) — the same rule the user site's /api/tile uses — so an old admin tab that saves a classic row still wins.
+ * A save writes only the changed child rows, then the manifest (only if versions/order changed), then the index.
+ * A tile is split when its content is ≥ SPLIT_MIN_BYTES and holds only "children" (once split it stays split). */
+const PARTS_ID = "_parts";
+const SPLIT_MIN_BYTES = 600_000;
+const PART_ID_RE = /^[\w\-.]+$/;
+const partRowId = (tid: unknown, cid: unknown) => `tile:${String(tid)}:${String(cid)}`;
+const manifestRowId = (tid: unknown) => `tile:${String(tid)}:${PARTS_ID}`;
+let splitTiles = new Set<string>(); // tiles stored as child rows
+let lastPartJson = new Map<string, string>(); // `${tid}\u0000${cid}` -> child JSON confirmed in the database
+let lastPartVersions = new Map<string, string>();
+let lastPartBytes = new Map<string, number>();
+let lastManifestJson = new Map<string, string>(); // tid -> JSON of [parts, top] as last written/read
+const partKey = (tid: string, cid: unknown) => `${tid}\u0000${String(cid)}`;
+const vTime = (s: unknown) => {
+  const t = Date.parse(String(s || "").split("~")[0]);
+  return Number.isNaN(t) ? 0 : t;
+};
+/** Biggest single database row this tile needs (split tiles: the biggest child row) — the 2.5 MB guard applies to this. */
+export function tileRowBytesOf(n: any): number {
+  const kids = Array.isArray(n?.children) ? n.children : null;
+  const heavyKeys = HEAVY_KEYS.filter(k => n && k in n);
+  const whole = byteLen(JSON.stringify(splitNode(n).heavy));
+  const canSplit = kids && kids.length > 0 && heavyKeys.length === 1 && heavyKeys[0] === "children";
+  if (!canSplit || (whole < SPLIT_MIN_BYTES && !splitTiles.has(String(n?.id)))) return whole;
+  return Math.max(0, ...kids.map((c: any) => byteLen(JSON.stringify(c))));
+}
+function shouldSplit(n: any, wholeBytes: number): boolean {
+  const kids = Array.isArray(n?.children) ? n.children : null;
+  if (!kids || kids.length === 0) return false;
+  const heavyKeys = HEAVY_KEYS.filter(k => n && k in n);
+  if (heavyKeys.length !== 1 || heavyKeys[0] !== "children") return false;
+  const ids = kids.map((c: any) => String(c?.id ?? ""));
+  if (ids.some((id: string) => !id || id === PARTS_ID || !PART_ID_RE.test(id)) || new Set(ids).size !== ids.length) return false;
+  return splitTiles.has(String(n?.id)) || wholeBytes >= SPLIT_MIN_BYTES;
+}
 const newVersion = () => `${new Date().toISOString()}~${Math.random().toString(36).slice(2, 7)}`;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const byteLen = (s: string) => {
@@ -377,13 +421,33 @@ function isNewer(a?: string | null, b?: string | null): boolean {
   return ta > (Number.isNaN(tb) ? 0 : tb) + LEGACY_SLACK_MS;
 }
 
-function rememberBaseline(nodes: any[], versions: Record<string, string>) {
+function rememberBaseline(nodes: any[], versions: Record<string, string>, manifests: Map<string, any> = new Map()) {
   lastSavedTileJson = new Map();
   lastSavedTileBytes = new Map();
+  splitTiles = new Set();
+  lastPartJson = new Map();
+  lastPartVersions = new Map();
+  lastPartBytes = new Map();
+  lastManifestJson = new Map();
   for (const n of nodes) {
+    const tid = String(n?.id);
     const hj = JSON.stringify(splitNode(n).heavy);
-    lastSavedTileJson.set(String(n?.id), hj);
-    lastSavedTileBytes.set(String(n?.id), byteLen(hj));
+    lastSavedTileJson.set(tid, hj);
+    lastSavedTileBytes.set(tid, byteLen(hj));
+    const m = manifests.get(tid);
+    if (m && Array.isArray(n?.children)) {
+      splitTiles.add(tid);
+      const pv = new Map<string, any>((m.parts || []).map((p: any) => [String(p[0]), p]));
+      for (const c of n.children) {
+        const p = pv.get(String(c?.id));
+        if (!p) continue;
+        const cj = JSON.stringify(c);
+        lastPartJson.set(partKey(tid, c.id), cj);
+        lastPartVersions.set(partKey(tid, c.id), String(p[1]));
+        lastPartBytes.set(partKey(tid, c.id), byteLen(cj));
+      }
+      lastManifestJson.set(tid, JSON.stringify([m.parts, m.top ?? {}]));
+    }
   }
   currentTileVersions = { ...versions };
   splitReady = true;
@@ -468,10 +532,12 @@ export async function fetchStudyBullStateFromSupabase<TNode = unknown, TSettings
   const client = supabase;
 
   try {
-    const [mainRes, idxRes, tilesRes] = await Promise.all([
+    // Stamps first (settings only — tiny), then only the rows that hold the current version of each tile
+    // (STORAGE SPLIT v2: the classic "tile:<id>" rows of split tiles are old backups and are not downloaded).
+    const [mainRes, idxRes, stampRes] = await Promise.all([
       client.from(SUPABASE_TABLE).select("id, settings, updated_at").eq("id", SUPABASE_MAIN_ROW_ID).maybeSingle(),
       client.from(SUPABASE_TABLE).select("id, nodes, settings").eq("id", SPLIT_INDEX_ID).maybeSingle(),
-      client.from(SUPABASE_TABLE).select("id, nodes, settings").like("id", "tile:%"),
+      client.from(SUPABASE_TABLE).select("id, settings").like("id", "tile:%"),
     ]);
     const main: any = mainRes.data;
     const idx: any = idxRes.data;
@@ -480,16 +546,58 @@ export async function fetchStudyBullStateFromSupabase<TNode = unknown, TSettings
     if (mainSettings) lastMainSettingsJson = JSON.stringify(mainSettings);
     if (split?.mainAt && isNewer(split.mainAt, lastSplitAt || null)) lastSplitAt = split.mainAt;
 
-    let useSplit = Boolean(!idxRes.error && !tilesRes.error && idx && Array.isArray(idx.nodes) && split && split.tiles);
+    let useSplit = Boolean(!idxRes.error && !stampRes.error && idx && Array.isArray(idx.nodes) && split && split.tiles);
     // An older admin tab wrote only the old row after the last split save → the old row is the truth
     if (useSplit && main?.updated_at && isNewer(main.updated_at, split.mainAt)) useSplit = false;
 
     if (useSplit) {
-      const byId = new Map<string, any>((tilesRes.data || []).map((r: any) => [String(r.id), r]));
-      const nodes: any[] = [];
+      const stamps = new Map<string, any>((stampRes.data || []).map((r: any) => [String(r.id), r.settings || {}]));
+      const manifests = new Map<string, any>();
+      const want: string[] = [];
+      const plan: Array<{ l: any; tid: string; kind: "parts" | "row"; rowId: string; m?: any }> = [];
       for (const l of idx.nodes) {
-        const { _sb, ...light } = l || {};
-        const row = byId.get(String(_sb?.row || tileRowId(light.id)));
+        const tid = String(l?.id);
+        const v = String(split.tiles?.[tid] || "");
+        const ms = stamps.get(manifestRowId(tid));
+        const m = ms && ms.fmt === 2 && Array.isArray(ms.parts) ? ms : null;
+        const rowId = String(l?._sb?.row || tileRowId(tid));
+        const os = stamps.get(rowId);
+        const useParts = Boolean(m && ((v && String(m._v) === v) || (!(os && v && String(os._v || "") === v) && (!os || vTime(m._v) >= vTime(os._v)))));
+        if (useParts) {
+          manifests.set(tid, m);
+          for (const p of m.parts) want.push(partRowId(tid, p[0]));
+          plan.push({ l, tid, kind: "parts", rowId, m });
+        } else {
+          want.push(rowId);
+          plan.push({ l, tid, kind: "row", rowId });
+        }
+      }
+      // fetch the needed rows in a few parallel batches (each ≤ ~1 MB)
+      const batches: string[][] = [];
+      for (let i = 0; i < want.length; i += 4) batches.push(want.slice(i, i + 4));
+      const results = await Promise.all(batches.map(ids => client.from(SUPABASE_TABLE).select("id, nodes, settings").in("id", ids)));
+      if (results.some(r => r.error)) useSplit = false;
+      const byId = new Map<string, any>();
+      for (const r of results) for (const row of (r.data || []) as any[]) byId.set(String(row.id), row);
+      const nodes: any[] = [];
+      for (const it of useSplit ? plan : []) {
+        const { _sb, ...light } = it.l || {};
+        if (it.kind === "parts") {
+          const children: any[] = [];
+          for (const p of it.m.parts) {
+            const row = byId.get(partRowId(it.tid, p[0]));
+            const child = row && Array.isArray(row.nodes) ? row.nodes[0] : null;
+            if (!child) {
+              useSplit = false;
+              break;
+            }
+            children.push(child);
+          }
+          if (!useSplit) break;
+          nodes.push({ ...light, ...(it.m.top && typeof it.m.top === "object" ? it.m.top : {}), children });
+          continue;
+        }
+        const row = byId.get(it.rowId);
         const heavyRow = row && Array.isArray(row.nodes) ? row.nodes[0] : null;
         if (!heavyRow) {
           useSplit = false;
@@ -499,7 +607,7 @@ export async function fetchStudyBullStateFromSupabase<TNode = unknown, TSettings
         nodes.push({ ...light, ...heavy });
       }
       if (useSplit) {
-        rememberBaseline(nodes, split.tiles || {});
+        rememberBaseline(nodes, split.tiles || {}, manifests);
         return {
           nodes: nodes as TNode[],
           settings: (mainSettings || publicSettings(idx.settings)) as Partial<TSettings>,
@@ -597,6 +705,12 @@ async function saveSplitOnce(p: SavePayload): Promise<{ ok: boolean; rows?: numb
     const nextJson = new Map<string, string>();
     const nextBytes = new Map<string, number>();
     const nextVersions: Record<string, string> = {};
+    const manifestsOut: any[] = [];
+    const nextSplit = new Set<string>();
+    const nextPartJson = new Map<string, string>();
+    const nextPartVersions = new Map<string, string>();
+    const nextPartBytes = new Map<string, number>();
+    const nextManifestJson = new Map<string, string>();
 
     for (const n of nodes) {
       const id = String(n?.id);
@@ -604,14 +718,45 @@ async function saveSplitOnce(p: SavePayload): Promise<{ ok: boolean; rows?: numb
       const hj = JSON.stringify(heavy);
       let v = currentTileVersions[id];
       let b = lastSavedTileBytes.get(id) || 0;
-      if (!splitReady || !v || lastSavedTileJson.get(id) !== hj) {
+      let pb: number | undefined;
+      const wasSplit = splitTiles.has(id);
+      if (shouldSplit(n, lastSavedTileJson.get(id) === hj ? b : byteLen(hj))) {
+        // STORAGE SPLIT v2: only the child rows whose content changed, then the manifest if anything moved
+        nextSplit.add(id);
+        const parts: Array<[string, string, number]> = [];
+        let partsChanged = false;
+        for (const c of n.children as any[]) {
+          const k = partKey(id, c.id);
+          const cj = JSON.stringify(c);
+          let cv = lastPartVersions.get(k);
+          let cb = lastPartBytes.get(k) || 0;
+          if (!splitReady || !wasSplit || !cv || lastPartJson.get(k) !== cj) {
+            cv = newVersion();
+            cb = byteLen(cj);
+            partsChanged = true;
+            changed.push({ id: partRowId(id, c.id), nodes: [c], settings: { _v: cv, tile: n?.id, part: c.id }, updated_at: SPLIT_OLD_TS });
+          }
+          nextPartJson.set(k, cj);
+          nextPartVersions.set(k, cv);
+          nextPartBytes.set(k, cb);
+          parts.push([String(c.id), cv, cb]);
+        }
+        const mj = JSON.stringify([parts, {}]);
+        if (!splitReady || !wasSplit || !v || partsChanged || lastManifestJson.get(id) !== mj) {
+          v = newVersion();
+          manifestsOut.push({ id: manifestRowId(id), nodes: [], settings: { _v: v, tile: n?.id, fmt: 2, parts, top: {} }, updated_at: SPLIT_OLD_TS });
+        }
+        nextManifestJson.set(id, mj);
+        b = lastSavedTileJson.get(id) === hj && b ? b : byteLen(hj);
+        pb = Math.max(0, ...parts.map(p => p[2]));
+      } else if (!splitReady || !v || wasSplit || lastSavedTileJson.get(id) !== hj) {
         v = newVersion();
         b = byteLen(hj);
         changed.push({ id: tileRowId(id), nodes: [heavy], settings: { _v: v, tile: n?.id }, updated_at: SPLIT_OLD_TS });
       }
       nextJson.set(id, hj);
       nextBytes.set(id, b);
-      nextVersions[id] = v;
+      nextVersions[id] = v as string;
       lights.push({
         ...light,
         _sb: {
@@ -620,15 +765,22 @@ async function saveSplitOnce(p: SavePayload): Promise<{ ok: boolean; rows?: numb
           n: Array.isArray(n?.children) ? n.children.length : 0,
           heavy: HEAVY_KEYS.filter(k => n && k in n),
           b,
+          ...(pb !== undefined ? { split: 2, pb } : {}),
         },
       });
     }
 
-    // 1) changed tile rows (in parallel) — readers only learn a new version after its row is in place
-    if (changed.length > 0) {
-      const results = await Promise.all(changed.map(row => client.from(SUPABASE_TABLE).upsert(row, { onConflict: "id" })));
+    // 1) changed tile / child rows (in parallel, a few at a time) — readers only learn a new version after its row is in place
+    for (let i = 0; i < changed.length; i += 6) {
+      const results = await Promise.all(changed.slice(i, i + 6).map(row => client.from(SUPABASE_TABLE).upsert(row, { onConflict: "id" })));
       const bad = results.find(r => r.error);
       if (bad && bad.error) return { ok: false, error: `${bad.error.code || ""} ${bad.error.message || "tile save error"}`.trim() };
+    }
+    // 1b) manifests of split tiles (small) — after their child rows
+    if (manifestsOut.length > 0) {
+      const results = await Promise.all(manifestsOut.map(row => client.from(SUPABASE_TABLE).upsert(row, { onConflict: "id" })));
+      const bad = results.find(r => r.error);
+      if (bad && bad.error) return { ok: false, error: `${bad.error.code || ""} ${bad.error.message || "manifest save error"}`.trim() };
     }
 
     // 2) the small index row (order, titles, settings without passcodes, versions)
@@ -645,6 +797,11 @@ async function saveSplitOnce(p: SavePayload): Promise<{ ok: boolean; rows?: numb
     lastSavedTileJson = nextJson;
     lastSavedTileBytes = nextBytes;
     currentTileVersions = nextVersions;
+    splitTiles = nextSplit;
+    lastPartJson = nextPartJson;
+    lastPartVersions = nextPartVersions;
+    lastPartBytes = nextPartBytes;
+    lastManifestJson = nextManifestJson;
     splitReady = true;
 
     // 3) The old single row "main" no longer gets the content (Oct 26 2026: the multi-MB copy timed out on big
@@ -655,7 +812,7 @@ async function saveSplitOnce(p: SavePayload): Promise<{ ok: boolean; rows?: numb
       const sj = JSON.stringify(p.settings ?? null);
       if (sj !== lastMainSettingsJson) queueMainWrite({ nodes: [], settings: p.settings, at });
     }
-    return { ok: true, rows: changed.length + 1 };
+    return { ok: true, rows: changed.length + manifestsOut.length + 1 };
   } catch (err: any) {
     return { ok: false, error: err?.message || "network error" };
   }

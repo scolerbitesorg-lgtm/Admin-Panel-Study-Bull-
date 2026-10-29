@@ -23,7 +23,7 @@ export type AnyNode = {
   [k: string]: unknown;
 };
 
-export const TILE_LIMIT = 2_500_000; // bytes per tile row (Aarav's size guard)
+export const TILE_LIMIT = 2_500_000; // bytes per database row (Aarav's size guard; big tiles = one row per child folder)
 export const TILE_WARN = 2_400_000;
 export const BAD_TEXT = ["document.", "var ", "STORE_KEY", "moodmoji", "BATCH=", "elementById", "onclick="];
 const HEAVY_KEYS = ["children", "passages"];
@@ -43,10 +43,17 @@ export function byteLen(s: string): number {
   return unescape(encodeURIComponent(s)).length;
 }
 
+/** Bytes of the BIGGEST database row this tile needs (Oct 29 2026 storage split v2: a tile of ≥ 600 KB that holds only
+ *  "children" is stored as one row per top-level child folder, so the 2.5 MB guard applies to its biggest child row). */
+export const SPLIT_MIN_BYTES = 600_000;
 export function tileBytes(tile: AnyNode): number {
   const heavy: Record<string, unknown> = { id: tile?.id };
   for (const k of Object.keys(tile || {})) if (HEAVY_KEYS.includes(k)) heavy[k] = (tile as any)[k];
-  return byteLen(JSON.stringify(heavy));
+  const whole = byteLen(JSON.stringify(heavy));
+  const keys = Object.keys(heavy).filter(k => k !== "id");
+  const kids = Array.isArray(tile?.children) ? tile.children : [];
+  if (whole < SPLIT_MIN_BYTES || keys.length !== 1 || keys[0] !== "children" || !kids.length) return whole;
+  return Math.max(0, ...kids.map(c => byteLen(JSON.stringify(c))));
 }
 
 export function isContainer(n: AnyNode | undefined | null): boolean {
@@ -513,7 +520,7 @@ export function checkAppendOnly(
       const before = tileBytes(o);
       const after = tileBytes(n);
       tb[n.id] = { before, after, title: n.title };
-      if (after > TILE_LIMIT && after > before) err(`"${n.title}" टाइल ${(after / 1e6).toFixed(2)} MB हो जाएगी — 2.5 MB सीमा से ज़्यादा`);
+      if (after > TILE_LIMIT && after > before) err(`"${n.title}" की सबसे बड़ी row ${(after / 1e6).toFixed(2)} MB हो जाएगी — 2.5 MB सीमा से ज़्यादा`);
     });
 
   if (!errors.length && added.nodes + added.questions + added.passages + added.notesAppends === 0) err("कुछ नया जोड़ने को नहीं मिला");
