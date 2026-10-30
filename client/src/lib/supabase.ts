@@ -365,6 +365,57 @@ const vTime = (s: unknown) => {
   const t = Date.parse(String(s || "").split("~")[0]);
   return Number.isNaN(t) ? 0 : t;
 };
+/* ---------- NESTED SPLIT (Oct 30 2026: Quiz → इतिहास row reached ~0.95 MB) ----------
+ * A top-level folder row of a split tile may itself be split ONE level deeper: when the folder is ≥ NEST_MIN_BYTES
+ * (or was nested before), each of its sub-folders that is ≥ SUB_MIN_BYTES (or was a sub row before) and has children
+ * gets its own row "tile:<tileId>:<subId>" (nodes = [subFolder], settings = { _v, tile, part: subId, parent }).
+ * Inside the folder's own row such a sub-folder is the placeholder { id, _sbPart: 1 }, and the manifest lists it as
+ * [subId, subVersion, bytes, parentId] (4th element = parent folder id). Readers (this file, the user site's
+ * /api/tile + splitStore) put the sub-folders back in place, so the editor and the site see the same tree as before. */
+const NEST_MIN_BYTES = 900_000;
+const SUB_MIN_BYTES = 100_000;
+let lastSubs = new Map<string, Set<string>>(); // partKey(tid, folderId) -> ids of its sub-folders stored as own rows
+function nestPlan(tid: string, c: any, cBytes: number, taken: Set<string>): { deflated: any; subs: any[] } | null {
+  const kids = Array.isArray(c?.children) ? c.children : null;
+  if (!kids || kids.length === 0) return null;
+  const prev = lastSubs.get(partKey(tid, c?.id));
+  if (!(cBytes >= NEST_MIN_BYTES || (prev && prev.size > 0))) return null;
+  const subs: any[] = [];
+  for (const g of kids) {
+    const gid = String(g?.id ?? "");
+    if (!g || typeof g !== "object" || g._sbPart || !gid || gid === PARTS_ID || !PART_ID_RE.test(gid) || taken.has(gid)) continue;
+    if (!Array.isArray(g.children) || g.children.length === 0) continue;
+    if (!(prev?.has(gid) || byteLen(JSON.stringify(g)) >= SUB_MIN_BYTES)) continue;
+    taken.add(gid);
+    subs.push(g);
+  }
+  if (subs.length === 0) return null;
+  const set = new Set(subs);
+  return { deflated: { ...c, children: kids.map((g: any) => (set.has(g) ? { id: g.id, _sbPart: 1 } : g)) }, subs };
+}
+/** Put sub-folder rows back into their parent folders (nested split). Returns null when a sub row is missing. */
+function inflateSubs(children: any[], subs: Map<string, any>): any[] | null {
+  if (subs.size === 0) return children;
+  const out: any[] = [];
+  for (const c of children) {
+    if (!c || !Array.isArray(c.children) || !c.children.some((g: any) => g && g._sbPart)) {
+      out.push(c);
+      continue;
+    }
+    const kids: any[] = [];
+    for (const g of c.children) {
+      if (!g || !g._sbPart) {
+        kids.push(g);
+        continue;
+      }
+      const n = subs.get(String(g.id));
+      if (!n) return null;
+      kids.push(n);
+    }
+    out.push({ ...c, children: kids });
+  }
+  return out;
+}
 /** Biggest single database row this tile needs (split tiles: the biggest child row) — the 2.5 MB guard applies to this. */
 export function tileRowBytesOf(n: any): number {
   const kids = Array.isArray(n?.children) ? n.children : null;
@@ -372,7 +423,16 @@ export function tileRowBytesOf(n: any): number {
   const whole = byteLen(JSON.stringify(splitNode(n).heavy));
   const canSplit = kids && kids.length > 0 && heavyKeys.length === 1 && heavyKeys[0] === "children";
   if (!canSplit || (whole < SPLIT_MIN_BYTES && !splitTiles.has(String(n?.id)))) return whole;
-  return Math.max(0, ...kids.map((c: any) => byteLen(JSON.stringify(c))));
+  const taken = new Set<string>(kids.map((c: any) => String(c?.id ?? "")));
+  return Math.max(
+    0,
+    ...kids.map((c: any) => {
+      const b = byteLen(JSON.stringify(c));
+      const plan = nestPlan(String(n?.id), c, b, taken);
+      if (!plan) return b;
+      return Math.max(byteLen(JSON.stringify(plan.deflated)), ...plan.subs.map((g: any) => byteLen(JSON.stringify(g))));
+    })
+  );
 }
 function shouldSplit(n: any, wholeBytes: number): boolean {
   const kids = Array.isArray(n?.children) ? n.children : null;
@@ -429,6 +489,7 @@ function rememberBaseline(nodes: any[], versions: Record<string, string>, manife
   lastPartVersions = new Map();
   lastPartBytes = new Map();
   lastManifestJson = new Map();
+  lastSubs = new Map();
   for (const n of nodes) {
     const tid = String(n?.id);
     const hj = JSON.stringify(splitNode(n).heavy);
@@ -440,8 +501,25 @@ function rememberBaseline(nodes: any[], versions: Record<string, string>, manife
       const pv = new Map<string, any>((m.parts || []).map((p: any) => [String(p[0]), p]));
       for (const c of n.children) {
         const p = pv.get(String(c?.id));
-        if (!p) continue;
-        const cj = JSON.stringify(c);
+        if (!p || p[3] != null) continue;
+        // nested split: the folder row holds placeholders for its sub-folder rows
+        const subIds = new Set<string>(
+          (m.parts || []).filter((q: any) => q && q[3] != null && String(q[3]) === String(c.id)).map((q: any) => String(q[0]))
+        );
+        let stored = c;
+        if (subIds.size > 0 && Array.isArray(c.children)) {
+          stored = { ...c, children: c.children.map((g: any) => (g && subIds.has(String(g.id)) ? { id: g.id, _sbPart: 1 } : g)) };
+          lastSubs.set(partKey(tid, c.id), subIds);
+          for (const g of c.children) {
+            const q = g && subIds.has(String(g.id)) ? pv.get(String(g.id)) : null;
+            if (!q) continue;
+            const gj = JSON.stringify(g);
+            lastPartJson.set(partKey(tid, g.id), gj);
+            lastPartVersions.set(partKey(tid, g.id), String(q[1]));
+            lastPartBytes.set(partKey(tid, g.id), byteLen(gj));
+          }
+        }
+        const cj = JSON.stringify(stored);
         lastPartJson.set(partKey(tid, c.id), cj);
         lastPartVersions.set(partKey(tid, c.id), String(p[1]));
         lastPartBytes.set(partKey(tid, c.id), byteLen(cj));
@@ -583,7 +661,8 @@ export async function fetchStudyBullStateFromSupabase<TNode = unknown, TSettings
       for (const it of useSplit ? plan : []) {
         const { _sb, ...light } = it.l || {};
         if (it.kind === "parts") {
-          const children: any[] = [];
+          const flat: any[] = [];
+          const subs = new Map<string, any>();
           for (const p of it.m.parts) {
             const row = byId.get(partRowId(it.tid, p[0]));
             const child = row && Array.isArray(row.nodes) ? row.nodes[0] : null;
@@ -591,9 +670,15 @@ export async function fetchStudyBullStateFromSupabase<TNode = unknown, TSettings
               useSplit = false;
               break;
             }
-            children.push(child);
+            if (p[3] != null) subs.set(String(p[0]), child);
+            else flat.push(child);
           }
           if (!useSplit) break;
+          const children = inflateSubs(flat, subs);
+          if (!children) {
+            useSplit = false;
+            break;
+          }
           nodes.push({ ...light, ...(it.m.top && typeof it.m.top === "object" ? it.m.top : {}), children });
           continue;
         }
@@ -630,6 +715,7 @@ export async function fetchStudyBullStateFromSupabase<TNode = unknown, TSettings
     // Split rows missing or older than the old row: rebuild them from it (same content, background)
     splitReady = false;
     lastSavedTileJson = new Map();
+    lastSubs = new Map();
     currentTileVersions = {};
     if (nodes.length > 0) {
       void runSave({ nodes: nodes as unknown[], settings, at: data.updated_at, skipMain: true });
@@ -711,6 +797,7 @@ async function saveSplitOnce(p: SavePayload): Promise<{ ok: boolean; rows?: numb
     const nextPartVersions = new Map<string, string>();
     const nextPartBytes = new Map<string, number>();
     const nextManifestJson = new Map<string, string>();
+    const nextSubs = new Map<string, Set<string>>();
 
     for (const n of nodes) {
       const id = String(n?.id);
@@ -723,23 +810,49 @@ async function saveSplitOnce(p: SavePayload): Promise<{ ok: boolean; rows?: numb
       if (shouldSplit(n, lastSavedTileJson.get(id) === hj ? b : byteLen(hj))) {
         // STORAGE SPLIT v2: only the child rows whose content changed, then the manifest if anything moved
         nextSplit.add(id);
-        const parts: Array<[string, string, number]> = [];
+        const parts: Array<[string, string, number] | [string, string, number, string]> = [];
         let partsChanged = false;
+        const taken = new Set<string>((n.children as any[]).map((c: any) => String(c?.id ?? "")));
         for (const c of n.children as any[]) {
           const k = partKey(id, c.id);
-          const cj = JSON.stringify(c);
+          const full = JSON.stringify(c);
+          // NESTED SPLIT: a big folder keeps placeholders in its own row and its big sub-folders get their own rows
+          const plan = nestPlan(id, c, byteLen(full), taken);
+          const stored = plan ? plan.deflated : c;
+          const cj = plan ? JSON.stringify(stored) : full;
           let cv = lastPartVersions.get(k);
           let cb = lastPartBytes.get(k) || 0;
           if (!splitReady || !wasSplit || !cv || lastPartJson.get(k) !== cj) {
             cv = newVersion();
             cb = byteLen(cj);
             partsChanged = true;
-            changed.push({ id: partRowId(id, c.id), nodes: [c], settings: { _v: cv, tile: n?.id, part: c.id }, updated_at: SPLIT_OLD_TS });
+            changed.push({ id: partRowId(id, c.id), nodes: [stored], settings: { _v: cv, tile: n?.id, part: c.id }, updated_at: SPLIT_OLD_TS });
           }
           nextPartJson.set(k, cj);
           nextPartVersions.set(k, cv);
           nextPartBytes.set(k, cb);
           parts.push([String(c.id), cv, cb]);
+          if (plan) {
+            const ids = new Set<string>();
+            for (const g of plan.subs) {
+              const sk = partKey(id, g.id);
+              const gj = JSON.stringify(g);
+              let gv = lastPartVersions.get(sk);
+              let gb = lastPartBytes.get(sk) || 0;
+              if (!splitReady || !wasSplit || !gv || lastPartJson.get(sk) !== gj) {
+                gv = newVersion();
+                gb = byteLen(gj);
+                partsChanged = true;
+                changed.push({ id: partRowId(id, g.id), nodes: [g], settings: { _v: gv, tile: n?.id, part: g.id, parent: c.id }, updated_at: SPLIT_OLD_TS });
+              }
+              nextPartJson.set(sk, gj);
+              nextPartVersions.set(sk, gv);
+              nextPartBytes.set(sk, gb);
+              parts.push([String(g.id), gv, gb, String(c.id)]);
+              ids.add(String(g.id));
+            }
+            nextSubs.set(k, ids);
+          }
         }
         const mj = JSON.stringify([parts, {}]);
         if (!splitReady || !wasSplit || !v || partsChanged || lastManifestJson.get(id) !== mj) {
@@ -802,6 +915,7 @@ async function saveSplitOnce(p: SavePayload): Promise<{ ok: boolean; rows?: numb
     lastPartVersions = nextPartVersions;
     lastPartBytes = nextPartBytes;
     lastManifestJson = nextManifestJson;
+    lastSubs = nextSubs;
     splitReady = true;
 
     // 3) The old single row "main" no longer gets the content (Oct 26 2026: the multi-MB copy timed out on big
